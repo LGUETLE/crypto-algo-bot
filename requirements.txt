@@ -1,7 +1,7 @@
 ccxt>=4.5.0
 pandas>=2.0.0
-numpy>=1.24.0,<2.0
-pandas-ta>=0.3.14b
+numpy>=1.26.0
+pandas-ta>=0.4.67b0
 pyarrow>=14.0.0
 pyyaml>=6.0
 python-dotenv>=1.0.0

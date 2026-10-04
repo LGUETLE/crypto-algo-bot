@@ -19,7 +19,8 @@ Systematic futures trading bot (Python + ccxt). Exchange-agnostic: OKX Europe (X
 ```bash
 git clone https://github.com/LGUETLE/crypto-algo-bot.git
 cd crypto-algo-bot
-python3 -m venv .venv && source .venv/bin/activate
+# requires Python 3.12+ (pandas-ta 0.4.x)
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env                       # add your keys
 pytest tests/ -v                           # everything must be green

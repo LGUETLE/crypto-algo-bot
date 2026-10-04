@@ -8,10 +8,11 @@ Groups: trend, momentum, volatility, volume, market structure, time.
 Usage:
   df = FeatureEngineer().transform(df)
 
-pandas_ta column orders (verified):
-  bbands -> lower, mid, upper, bandwidth, percent
-  kc     -> lower, basis, upper
-  macd   -> macd, histogram, signal
+pandas_ta results are read BY COLUMN NAME (see _pick), never by position:
+  bbands -> BBL, BBM, BBU, BBB, BBP
+  kc     -> KCL, KCB, KCU
+  macd   -> MACD, MACDh (histogram), MACDs (signal)
+  adx    -> ADX, (ADXR in 0.4.x), DMP, DMN
 """
 import logging
 
@@ -20,6 +21,12 @@ import pandas as pd
 import pandas_ta as ta
 
 logger = logging.getLogger(__name__)
+
+
+def _pick(frame: pd.DataFrame, prefix: str) -> pd.Series:
+    """First column of a pandas_ta result whose name starts with `prefix`.
+    Selecting by name is safer than by position: pandas-ta 0.4.x inserted an ADXR column into adx()."""
+    return frame[[c for c in frame.columns if str(c).startswith(prefix)][0]]
 
 
 class FeatureEngineer:
@@ -46,15 +53,15 @@ class FeatureEngineer:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         if macd is not None:
             df["macd"], df["macd_hist"], df["macd_signal"] = (
-                macd.iloc[:, 0], macd.iloc[:, 1], macd.iloc[:, 2])
+                _pick(macd, "MACD_"), _pick(macd, "MACDh"), _pick(macd, "MACDs"))
 
         adx = ta.adx(df["high"], df["low"], df["close"], length=14)
         if adx is not None:
-            df["adx"], df["dmp"], df["dmn"] = adx.iloc[:, 0], adx.iloc[:, 1], adx.iloc[:, 2]
+            df["adx"], df["dmp"], df["dmn"] = _pick(adx, "ADX_"), _pick(adx, "DMP"), _pick(adx, "DMN")
 
         st = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3)
         if st is not None:
-            df["supertrend_dir"] = st.iloc[:, 1]    # 1 = uptrend, -1 = downtrend
+            df["supertrend_dir"] = _pick(st, "SUPERTd")    # 1 = uptrend, -1 = downtrend
         return df
 
     # ── Momentum ──────────────────────────────────────────────────────────
@@ -66,7 +73,7 @@ class FeatureEngineer:
 
         stoch = ta.stoch(df["high"], df["low"], df["close"])
         if stoch is not None:
-            df["stoch_k"], df["stoch_d"] = stoch.iloc[:, 0], stoch.iloc[:, 1]
+            df["stoch_k"], df["stoch_d"] = _pick(stoch, "STOCHk"), _pick(stoch, "STOCHd")
 
         df["roc_5"]  = ta.roc(df["close"], length=5)
         df["roc_20"] = ta.roc(df["close"], length=20)
@@ -82,13 +89,13 @@ class FeatureEngineer:
         bb = ta.bbands(df["close"], length=20, std=2)
         if bb is not None:
             df["bb_lower"], df["bb_mid"], df["bb_upper"] = (
-                bb.iloc[:, 0], bb.iloc[:, 1], bb.iloc[:, 2])
+                _pick(bb, "BBL"), _pick(bb, "BBM"), _pick(bb, "BBU"))
             df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"]
             df["bb_pct"]   = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"] + 1e-10)
 
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         if kc is not None:
-            df["kc_lower"], df["kc_upper"] = kc.iloc[:, 0], kc.iloc[:, 2]
+            df["kc_lower"], df["kc_upper"] = _pick(kc, "KCL"), _pick(kc, "KCU")
 
         # Squeeze: Bollinger Bands fully inside the Keltner Channel
         if "bb_upper" in df.columns and "kc_upper" in df.columns:
