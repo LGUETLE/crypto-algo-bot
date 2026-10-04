@@ -1,0 +1,49 @@
+# ── Exchange ──────────────────────────────────
+# ccxt exchange id. EEA residents: myokx (OKX Europe). See README "Exchanges" before changing.
+exchange:        myokx
+market_type:     future     # ccxt market type: "swap" (perpetuals) or "future" (OKX Europe X-Perps)
+margin_currency: USDC       # currency your futures margin is held in (EEA X-Perps: check your account)
+log_level:       INFO
+
+# ── Strategy ──────────────────────────────────
+strategy:  donchian_breakout
+timeframe: "1h"
+
+# Higher-timeframe trend filter ("guardian"): longs only if price is above the last closed
+# macro candle, shorts only if below. Set use_macro_filter: false to disable.
+use_macro_filter: true
+macro_timeframe:  "1d"
+
+# Donchian breakout parameters (re-validate after the engine fixes!)
+dc_enter:      40     # entry channel length
+dc_exit:        5     # exit channel length
+atr_period:    14
+atr_min_mult:  0.7    # only trade when volatility is above average
+adx_threshold: 25     # only trade in a real trend
+vol_mult:      1.0
+
+# ── Risk management ───────────────────────────
+risk:
+  max_risk_per_trade:  0.02    # fraction of equity risked per trade (distance to the stop)
+  atr_stop_mult:       2.0     # stop distance = ATR * this
+  stop_loss_pct:       0.025   # fallback stop distance if ATR is unavailable
+  take_profit_pct:     null    # null = no fixed take profit (try 0.05 to compare)
+  trailing_activation: 0.015   # trailing stop arms after +1.5 % in favour (null = off)
+  trailing_callback:   0.008   # trailing distance 0.8 % behind the extreme
+  max_open_positions:  2
+  max_total_risk_pct:  0.04    # portfolio cap: sum of all open stop-out losses (crypto is correlated)
+  min_trade_risk_pct:  0.005   # skip an entry if less than this risk budget is left
+  max_daily_loss_pct:  0.05    # kill switch: no new entries for the rest of the UTC day
+  leverage:            3
+
+# ── Futures ───────────────────────────────────
+futures:
+  margin_type: isolated
+
+# ── Backtest ──────────────────────────────────
+backtest:
+  lookback_days:    1095
+  walk_forward_pct: 0.3
+  commission:       0.0006     # taker fee per side - set it to YOUR venue's fee tier
+  slippage:         0.0002
+  funding_rate_8h:  0.0001     # assumed constant; longs pay, shorts receive

@@ -1,0 +1,21 @@
+pairs:
+  # symbol:      market symbol on the trading venue
+  #              (find it with: python scripts/list_markets.py ETH)
+  # data_symbol: Binance symbol used as price-history proxy for backtests
+  #
+  # ETH: Donchian breakout.
+  # NOTE: earlier "validated" results (OOS Sharpe 1.37, OOS return +107.9 %) came from an
+  # engine that multiplied PnL by leverage - re-validate before trusting any number.
+  - symbol: "ETH/USDT:USDT"        # TODO on OKX Europe: replace with the ETH X-Perp symbol
+    data_symbol: "ETH/USDT:USDT"
+    active: true
+    weight: 1.0
+    strategy: donchian_breakout
+
+  # BTC: neither Donchian nor mean reversion worked on 1h in the old (buggy) tests.
+  # Candidate for later analysis on the 4h timeframe.
+  - symbol: "BTC/USDT:USDT"
+    data_symbol: "BTC/USDT:USDT"
+    active: false
+    weight: 0.0
+    strategy: donchian_breakout
