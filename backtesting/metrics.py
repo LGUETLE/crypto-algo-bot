@@ -11,13 +11,39 @@ Metrics:
 """
 import numpy as np
 import pandas as pd
+from scipy import stats
+
+YEAR_SECONDS = 365 * 24 * 3600          # crypto trades 24/7: 365 days, no trading-day calendar
+
+
+def periods_per_year(timeframe: str) -> float:
+    """Bars per year for a timeframe string ("1h" -> 8760, "4h" -> 2190, "1d" -> 365)."""
+    return YEAR_SECONDS / pd.Timedelta(timeframe).total_seconds()
+
+
+def infer_periods_per_year(index: pd.Index) -> float:
+    """Bars per year from the median bar spacing of a DatetimeIndex."""
+    if len(index) < 2:
+        return periods_per_year("1h")
+    step = pd.Series(index).diff().median().total_seconds()
+    return YEAR_SECONDS / step
+
+
+def period_returns(equity: pd.Series, capital: float = None) -> pd.Series:
+    """Simple returns per bar. With `capital`, the first bar's return vs. the start capital counts too."""
+    if capital is not None and len(equity):
+        prev = equity.shift(1)
+        prev.iloc[0] = capital
+        return (equity / prev - 1).astype(float)
+    return equity.pct_change().dropna()
 
 
 def calc_all(
     equity:           pd.Series,
     trades:           pd.DataFrame,
     capital:          float,
-    periods_per_year: int = 8760,     # hourly data: 24 * 365
+    periods_per_year: float = None,   # None -> inferred from the bar spacing of `equity`
+    risk_free_rate:   float = 0.0,    # annual; 0 = crypto convention, same basis for benchmarks
 ) -> dict:
     """
     Computes all metrics.
@@ -25,15 +51,16 @@ def calc_all(
     Args:
         equity:  equity curve (index = timestamp, values = account currency)
         trades:  trade history DataFrame (needs a pnl_usdt column)
-        capital: starting capital
-        periods_per_year: 8760 for 1h, 365 for daily, 52 for weekly data
+        capital: starting capital (the first bar's return is measured against it)
+        periods_per_year: bars per year used to annualise (8760 for 1h, 365 for 1d)
     """
-    ret     = _return_metrics(equity, capital, periods_per_year)
-    risk    = _risk_metrics(equity, periods_per_year)
-    trade   = _trade_metrics(trades) if not trades.empty else {}
-    quality = _quality_metrics(equity, ret, risk, periods_per_year)
+    ppy     = periods_per_year or infer_periods_per_year(equity.index)
+    ret     = _return_metrics(equity, capital, ppy)
+    risk    = _risk_metrics(equity, capital, ppy)
+    trade   = _trade_metrics(trades) if trades is not None and not trades.empty else {}
+    quality = _quality_metrics(period_returns(equity, capital), ret, risk, ppy, risk_free_rate)
 
-    return {**ret, **risk, **trade, **quality}
+    return {**ret, **risk, **trade, **quality, "periods_per_year": ppy}
 
 
 def print_report(metrics: dict):
@@ -92,27 +119,39 @@ def print_report(metrics: dict):
 
 # ── Internal calculations ─────────────────────────────────────────────────────
 
-def _return_metrics(equity: pd.Series, capital: float, ppy: int) -> dict:
+def _years(index: pd.Index, ppy: float) -> float:
+    """Calendar length of the curve incl. the last bar."""
+    if len(index) < 2:
+        return len(index) / ppy
+    span = (index[-1] - index[0]).total_seconds() + YEAR_SECONDS / ppy
+    return span / YEAR_SECONDS
+
+
+def _return_metrics(equity: pd.Series, capital: float, ppy: float) -> dict:
     if len(equity) == 0:
         return {"total_return": 0, "cagr": 0, "best_day": 0, "worst_day": 0, "final_equity": capital}
     total_return = (equity.iloc[-1] - capital) / capital
-    n_years      = len(equity) / ppy
-    cagr         = (equity.iloc[-1] / capital) ** (1 / max(n_years, 0.01)) - 1
-    returns      = equity.pct_change().dropna()
+    n_years      = _years(equity.index, ppy)
+    cagr         = (equity.iloc[-1] / capital) ** (1 / max(n_years, 1e-9)) - 1 if equity.iloc[-1] > 0 else -1.0
+    returns      = period_returns(equity, capital)
 
     return {
         "total_return": total_return,
         "cagr":         cagr,
-        "best_day":     returns.max(),
+        "best_day":     returns.max(),     # best / worst single BAR (label kept for compatibility)
         "worst_day":    returns.min(),
         "final_equity": round(equity.iloc[-1], 2),
+        "years":        n_years,
     }
 
 
-def _risk_metrics(equity: pd.Series, ppy: int) -> dict:
-    returns    = equity.pct_change().dropna()
-    roll_max   = equity.cummax()
-    drawdown   = (equity - roll_max) / roll_max
+def _risk_metrics(equity: pd.Series, capital: float, ppy: float) -> dict:
+    if len(equity) == 0:
+        return {"max_drawdown": 0.0, "avg_drawdown": 0.0, "volatility": 0.0, "var_95": 0.0}
+    returns    = period_returns(equity, capital)
+    curve      = pd.concat([pd.Series([capital]), pd.Series(equity.to_numpy())], ignore_index=True)
+    roll_max   = curve.cummax()
+    drawdown   = (curve - roll_max) / roll_max
     max_dd     = drawdown.min()
     avg_dd     = drawdown[drawdown < 0].mean() if (drawdown < 0).any() else 0.0
     volatility = returns.std() * np.sqrt(ppy)
@@ -126,20 +165,35 @@ def _risk_metrics(equity: pd.Series, ppy: int) -> dict:
     }
 
 
-def _quality_metrics(equity: pd.Series, ret: dict, risk: dict, ppy: int) -> dict:
-    returns  = equity.pct_change().dropna()
-    rf_rate  = 0.04 / ppy                                  # 4 % risk-free rate
-    excess   = returns - rf_rate
-    downside = returns[returns < 0].std() * np.sqrt(ppy)
+def _quality_metrics(returns: pd.Series, ret: dict, risk: dict, ppy: float, rf_annual: float) -> dict:
+    """
+    Sharpe  = mean(r - rf) / std(r) * sqrt(ppy)
+    Sortino = mean(r - rf) / downside deviation * sqrt(ppy),
+              downside deviation = sqrt(mean(min(r - rf, 0)^2)) over ALL bars
+    Also returns the non-annualised Sharpe, skewness and (Pearson, non-excess) kurtosis of the
+    bar returns, which the Probabilistic / Deflated Sharpe Ratio need.
+    """
+    if len(returns) < 2:
+        return {"sharpe": 0.0, "sortino": 0.0, "calmar": 0.0, "sharpe_per_period": 0.0,
+                "skew": 0.0, "kurtosis": 3.0, "n_periods": len(returns)}
+    rf      = rf_annual / ppy
+    excess  = returns - rf
+    std     = returns.std()
+    dd      = np.sqrt(np.mean(np.minimum(excess, 0) ** 2))
 
-    sharpe  = (excess.mean() / returns.std() * np.sqrt(ppy)) if returns.std() > 0 else 0
-    sortino = (excess.mean() * ppy / downside) if downside > 0 else 0
-    calmar  = ret["cagr"] / abs(risk["max_drawdown"]) if risk["max_drawdown"] != 0 else 0
+    sr_bar  = excess.mean() / std if std > 0 else 0.0
+    sharpe  = sr_bar * np.sqrt(ppy)
+    sortino = excess.mean() / dd * np.sqrt(ppy) if dd > 0 else 0.0
+    calmar  = ret["cagr"] / abs(risk["max_drawdown"]) if risk["max_drawdown"] != 0 else 0.0
 
     return {
-        "sharpe":  round(sharpe, 3),
-        "sortino": round(sortino, 3),
-        "calmar":  round(calmar, 3),
+        "sharpe":            round(float(sharpe), 3),
+        "sortino":           round(float(sortino), 3),
+        "calmar":            round(float(calmar), 3),
+        "sharpe_per_period": float(sr_bar),
+        "skew":              float(stats.skew(returns)) if std > 0 else 0.0,
+        "kurtosis":          float(stats.kurtosis(returns, fisher=False)) if std > 0 else 3.0,
+        "n_periods":         int(len(returns)),
     }
 
 

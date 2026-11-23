@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
+from backtesting.metrics import periods_per_year
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,8 +104,9 @@ class FeatureEngineer:
             df["squeeze"] = ((df["bb_upper"] < df["kc_upper"]) &
                              (df["bb_lower"] > df["kc_lower"])).astype(int)
 
-        # Annualised with sqrt(365*24) -> assumes 1h candles
-        df["hist_vol"] = df["close"].pct_change().rolling(20).std() * np.sqrt(365 * 24)
+        # Annualised for the configured bar timeframe (1h -> sqrt(8760))
+        ppy = periods_per_year(self.config.get("timeframe", "1h"))
+        df["hist_vol"] = df["close"].pct_change().rolling(20).std() * np.sqrt(ppy)
         return df
 
     # ── Volume ────────────────────────────────────────────────────────────

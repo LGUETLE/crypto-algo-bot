@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
-from backtesting.metrics import calc_all, print_report
+from backtesting.metrics import calc_all, infer_periods_per_year, periods_per_year, print_report
 from risk.position_sizer import PositionSizer
 from risk.stops import update_trailing
 
@@ -66,6 +66,14 @@ class BacktestEngine:
         self.trail_cb        = risk.get("trailing_callback")
         self.sizer           = PositionSizer(config)
         self.initial_capital = 10_000.0
+        self.timeframe       = config.get("timeframe")
+        self.risk_free_rate  = config["backtest"].get("risk_free_rate", 0.0)
+
+    def periods_per_year(self, index=None) -> float:
+        """Annualisation factor: from the configured timeframe, else from the bar spacing."""
+        if self.timeframe:
+            return periods_per_year(self.timeframe)
+        return infer_periods_per_year(index)
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
@@ -187,7 +195,8 @@ class BacktestEngine:
 
         equity  = pd.Series(equity_vals, index=idx[first:last + 1], name="equity")
         trades  = self._to_df(closed_trades)
-        metrics = calc_all(equity, trades, capital)
+        metrics = calc_all(equity, trades, capital, periods_per_year=self.periods_per_year(idx),
+                           risk_free_rate=self.risk_free_rate)
 
         if verbose:
             if not trades.empty:
