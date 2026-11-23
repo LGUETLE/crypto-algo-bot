@@ -42,8 +42,11 @@ class Trade:
     trail_active: bool                     = False
     exit_time:    Optional[pd.Timestamp]   = None
     exit_price:   Optional[float]          = None
-    pnl_usdt:     Optional[float]          = None
+    pnl_usdt:     Optional[float]          = None   # NET: price PnL - both fees + funding
     exit_reason:  str                      = ""
+    entry_fee:    float                    = 0.0
+    exit_fee:     float                    = 0.0
+    funding:      float                    = 0.0    # received (+) / paid (-) while open
 
 
 @dataclass
@@ -60,7 +63,8 @@ class BacktestEngine:
         self.config          = config
         self.commission      = config["backtest"]["commission"]
         self.slippage        = config["backtest"]["slippage"]
-        self.funding_8h      = config["backtest"].get("funding_rate_8h", 0.0)
+        self.funding_8h      = config["backtest"].get("funding_rate_8h", 0.0)   # fallback only
+        self._warned_const   = False
         self.leverage        = risk["leverage"]
         self.trail_act       = risk.get("trailing_activation")
         self.trail_cb        = risk.get("trailing_callback")
@@ -90,7 +94,7 @@ class BacktestEngine:
         return df
 
     def run(self, df, strategy, symbol="BTC/USDT:USDT", capital=None, verbose=True,
-            start=None, end=None) -> BacktestResult:
+            start=None, end=None, funding: Optional[pd.Series] = None) -> BacktestResult:
         """
         Event order per bar t (timestamps are candle OPEN times):
           1. orders decided on the close of bar t-1 are filled at the OPEN of bar t
@@ -100,6 +104,14 @@ class BacktestEngine:
           4. equity is marked at the close of bar t
           5. the signal on the close of bar t becomes the pending order for bar t+1
         A signal on the last bar is never filled (there is no next open).
+
+        Funding: `funding` = realised rates indexed by funding time (see DataFetcher.funding_history).
+        An event at time T is settled at the start of the first bar with open >= T, BEFORE that
+        bar's fills, against the position held at T, at the close of the bar ending at T:
+        payment = -side * size * price * rate (positive rate: longs pay). Without a series, a
+        constant backtest.funding_rate_8h at 00/08/16 UTC is used and a warning is logged.
+        Approximation: with bars longer than the funding interval, a position stopped out
+        intrabar is not charged for events inside its exit bar.
 
         start / end (optional, end exclusive) restrict TRADING to a window. Indicators are still
         computed on all rows of `df`, so history before `start` serves as warm-up.
@@ -127,7 +139,7 @@ class BacktestEngine:
         atr = full["atr_14"].to_numpy(dtype=float).tolist()
         idx = full.index
 
-        bar_hours = (idx.to_series().diff().median().total_seconds() / 3600) if len(idx) > 1 else 1.0
+        fund = self._funding_per_bar(idx, first, last, funding)
 
         cash, position = float(capital), None
         equity_vals, closed_trades = [], []
@@ -138,13 +150,20 @@ class BacktestEngine:
             p_sig, p_lx, p_sx, p_atr = (sig[i - 1], lx[i - 1], sx[i - 1], atr[i - 1]) if i > 0 \
                 else (0, False, False, float("nan"))
 
+            # ── 0. Funding events since the previous bar's open ───────────
+            if position is not None and fund[i] != 0.0:
+                d = 1 if position.side == "long" else -1
+                pay = -d * position.size * c[i - 1] * fund[i]
+                cash += pay
+                position.funding += pay
+
             # ── 1. Fills at the open ──────────────────────────────────────
             if position is not None:
                 is_long  = position.side == "long"
                 opposite = p_sig == (-1 if is_long else 1)
                 if opposite or (p_lx if is_long else p_sx):
                     position = self._close(position, ts, o[i], "Signal")
-                    cash += self._margin(position) + position.pnl_usdt
+                    cash += self._released(position)
                     closed_trades.append(position)
                     position = None
 
@@ -159,18 +178,15 @@ class BacktestEngine:
                     cash -= margin + fee
                     position = Trade(symbol=symbol, side=side, entry_time=ts,
                                      entry_price=ep, size=sz["size"],
-                                     sl_price=sz["sl_price"], tp_price=sz["tp_price"])
+                                     sl_price=sz["sl_price"], tp_price=sz["tp_price"],
+                                     entry_fee=fee)
 
             # ── 2./3. Intrabar stop / take profit, then trailing ──────────
             if position is not None:
-                d = 1 if position.side == "long" else -1
-                # Funding: longs pay, shorts receive (constant assumed rate)
-                cash -= d * position.size * c[i] * self.funding_8h * bar_hours / 8
-
                 raw_exit, reason = self._check_exit(position, o[i], h[i], l[i])
                 if raw_exit is not None:
                     position = self._close(position, ts, raw_exit, reason)
-                    cash += self._margin(position) + position.pnl_usdt
+                    cash += self._released(position)
                     closed_trades.append(position)
                     position = None
                 else:
@@ -188,8 +204,13 @@ class BacktestEngine:
 
         # Close a position still open at the end of the window at the final close (with costs)
         if position is not None:
+            if fund[last + 1] != 0.0:              # events inside the final bar
+                d = 1 if position.side == "long" else -1
+                pay = -d * position.size * c[last] * fund[last + 1]
+                cash += pay
+                position.funding += pay
             position = self._close(position, idx[last], c[last], "End")
-            cash += self._margin(position) + position.pnl_usdt
+            cash += self._released(position)
             closed_trades.append(position)
             equity_vals[-1] = cash
 
@@ -227,16 +248,55 @@ class BacktestEngine:
         return None, ""
 
     def _close(self, pos: Trade, ts, raw_price, reason) -> Trade:
+        """Sets exit price/fee and the NET trade PnL (price PnL - entry fee - exit fee + funding)."""
         is_long = pos.side == "long"
         exit_px = raw_price * (1 - self.slippage if is_long else 1 + self.slippage)
         d       = 1 if is_long else -1
-        pnl     = d * (exit_px - pos.entry_price) * pos.size - exit_px * pos.size * self.commission
-        pos.exit_time, pos.exit_price = ts, exit_px
-        pos.pnl_usdt, pos.exit_reason = pnl, reason
+        pos.exit_fee  = exit_px * pos.size * self.commission
+        pos.exit_time, pos.exit_price, pos.exit_reason = ts, exit_px, reason
+        pos.pnl_usdt  = self._gross(pos) - pos.entry_fee - pos.exit_fee + pos.funding
         return pos
+
+    @staticmethod
+    def _gross(pos: Trade) -> float:
+        d = 1 if pos.side == "long" else -1
+        return d * (pos.exit_price - pos.entry_price) * pos.size
+
+    def _released(self, pos: Trade) -> float:
+        """Cash returned on close. Entry fee and funding were already booked when they occurred."""
+        return self._margin(pos) + self._gross(pos) - pos.exit_fee
 
     def _margin(self, pos: Optional[Trade]) -> float:
         return pos.size * pos.entry_price / self.leverage if pos else 0.0
+
+    def _funding_per_bar(self, idx: pd.DatetimeIndex, first: int, last: int,
+                         funding: Optional[pd.Series]) -> np.ndarray:
+        """
+        Sum of funding rates to settle at the start of each bar (array of len(idx) + 1; the last
+        slot collects events inside the final bar). Event at T -> first bar with open >= T.
+        """
+        out = np.zeros(len(idx) + 1)
+        if len(idx) == 0:
+            return out
+        bar = pd.Timedelta(self.timeframe) if self.timeframe else (idx[1] - idx[0] if len(idx) > 1
+                                                                    else pd.Timedelta("1h"))
+        lo, hi = idx[max(first - 1, 0)], idx[last] + bar
+        if funding is None:
+            if not self.funding_8h:
+                return out
+            if not self._warned_const:
+                logger.warning(f"No historical funding series given: using a CONSTANT funding rate of "
+                               f"{self.funding_8h:+.4%} per 8h (00/08/16 UTC). Results are approximate.")
+                self._warned_const = True
+            times = pd.date_range(lo.floor("8h"), hi, freq="8h")
+            funding = pd.Series(self.funding_8h, index=times)
+        f = funding[(funding.index > lo) & (funding.index <= hi)]
+        if f.empty:
+            return out
+        pos = np.searchsorted(idx.asi8, f.index.as_unit(idx.unit).asi8, side="left")
+        np.add.at(out, pos, f.to_numpy(dtype=float))
+        out[: first] = 0.0          # never settle before trading starts
+        return out
 
     @staticmethod
     def _to_df(trades) -> pd.DataFrame:
@@ -247,6 +307,7 @@ class BacktestEngine:
             "entry_time": t.entry_time, "exit_time": t.exit_time,
             "entry_price": t.entry_price, "exit_price": t.exit_price,
             "size": t.size, "pnl_usdt": t.pnl_usdt, "exit_reason": t.exit_reason,
+            "fees": t.entry_fee + t.exit_fee, "funding": t.funding,
         } for t in trades])
 
     # ── Walk-forward ──────────────────────────────────────────────────────
