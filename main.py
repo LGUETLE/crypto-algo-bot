@@ -178,7 +178,7 @@ def run_backtest(config, pairs, symbol_filter=None):
         strategy = get_strategy(config, strat_name)
 
         engine.run(df, strategy, symbol=data_symbol)
-        wf = engine.walk_forward(df, strategy, symbol=data_symbol)
+        wf = engine.split_consistency_check(df, strategy, symbol=data_symbol)
         logger.info(f"OOS consistency: {wf['consistency']:.0%} | avg OOS Sharpe: {wf['avg_oos_sharpe']:.2f}")
 
 

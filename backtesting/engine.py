@@ -10,7 +10,7 @@ Features:
   - Optional fixed take profit
   - Signal exit and strategy exit channels (long_exit / short_exit)
   - Fees, slippage, simple funding model
-  - Walk-forward test
+  - Split consistency check (fixed parameters; walk-forward optimisation lives in optimizer.py)
 
 Accounting: `size` is in coins, so PnL = price difference * size.
 Leverage only reduces the margin that is locked, it does NOT multiply PnL.
@@ -310,22 +310,31 @@ class BacktestEngine:
             "fees": t.entry_fee + t.exit_fee, "funding": t.funding,
         } for t in trades])
 
-    # ── Walk-forward ──────────────────────────────────────────────────────
+    # ── Split consistency check (fixed parameters, NO re-fit) ─────────────
 
-    def walk_forward(self, df, strategy, symbol="BTC/USDT:USDT", n_splits=5) -> dict:
+    def split_consistency_check(self, df, strategy, symbol="BTC/USDT:USDT", n_splits=5,
+                                funding: Optional[pd.Series] = None) -> dict:
+        """
+        Cuts the data into n_splits consecutive blocks and runs the SAME (fixed) parameters on the
+        first part (labelled IS) and the last walk_forward_pct of each block (labelled OOS).
+        Nothing is fitted, so this only checks whether a fixed parameter set behaves consistently
+        across time. It is NOT a walk-forward optimisation: see
+        ParameterOptimizer.walk_forward_optimize() for that.
+        """
         split_size = len(df) // n_splits
         is_pct     = 1 - self.config["backtest"]["walk_forward_pct"]
         results    = []
-        logger.info(f"Walk-forward: {n_splits} splits, {is_pct:.0%} in-sample")
+        logger.info(f"Split consistency check: {n_splits} splits, fixed parameters")
 
         for i in range(n_splits):
             part = df.iloc[i * split_size:(i + 1) * split_size]
             sp   = int(len(part) * is_pct)
-            in_s, out_s = part.iloc[:sp], part.iloc[sp:]
-            if len(in_s) < 100 or len(out_s) < 30:
+            if sp < 100 or len(part) - sp < 30:
                 continue
-            ir  = self.run(in_s,  strategy, symbol, verbose=False)
-            oor = self.run(out_s, strategy, symbol, verbose=False)
+            upto  = df[df.index <= part.index[-1]]          # earlier rows serve as indicator warm-up
+            ir  = self.run(upto, strategy, symbol, verbose=False, start=part.index[0],
+                           end=part.index[sp], funding=funding)
+            oor = self.run(upto, strategy, symbol, verbose=False, start=part.index[sp], funding=funding)
             results.append({
                 "split": i + 1,
                 "is_sharpe":  ir.metrics.get("sharpe", 0),
@@ -337,7 +346,7 @@ class BacktestEngine:
             })
 
         df_res = pd.DataFrame(results)
-        self._print_wf(df_res)
+        self._print_split_check(df_res)
         return {
             "results": df_res,
             "avg_oos_sharpe": df_res["oos_sharpe"].mean() if not df_res.empty else 0,
@@ -346,9 +355,9 @@ class BacktestEngine:
         }
 
     @staticmethod
-    def _print_wf(df):
+    def _print_split_check(df):
         print("\n" + "=" * 65)
-        print("  WALK-FORWARD RESULTS")
+        print("  SPLIT CONSISTENCY CHECK (fixed parameters, no re-fit)")
         print("=" * 65)
         print(f"  {'Split':>5} | {'IS Sharpe':>10} | {'OOS Sharpe':>10} | {'IS Return':>10} | {'OOS Return':>10}")
         print(f"  {'-' * 60}")
@@ -358,8 +367,4 @@ class BacktestEngine:
                   f"{r['is_return']:>9.1%} | {r['oos_return']:>9.1%} {ok}")
         c = (df["oos_return"] > 0).mean() if not df.empty else 0
         print("=" * 65)
-        print(f"\n  OOS consistency: {c:.0%}")
-        print("  Robust - paper trading recommended" if c >= 0.6 else
-              "  Moderate - keep optimizing" if c >= 0.4 else
-              "  Not consistent enough")
-        print()
+        print(f"\n  Share of positive 'OOS' blocks: {c:.0%} (same parameters everywhere - not an OOS test)\n")
