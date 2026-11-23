@@ -1,6 +1,9 @@
 """
 Backtest Engine - long and short
 ================================
+Timing: a signal on the close of bar t is filled at the OPEN of bar t+1 (entries, signal
+exits and reversals). Stops/take profit are checked intrabar from the entry bar on.
+
 Features:
   - ATR-based stop loss (via PositionSizer, identical to live trading)
   - Trailing stop (via risk.stops.update_trailing, identical to live trading)
@@ -16,6 +19,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
@@ -65,35 +69,97 @@ class BacktestEngine:
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
-    def run(self, df, strategy, symbol="BTC/USDT:USDT",
-            capital=None, verbose=True) -> BacktestResult:
-
-        capital = capital or self.initial_capital
+    @staticmethod
+    def prepare(df: pd.DataFrame, strategy) -> pd.DataFrame:
+        """Indicators + signals on the whole frame (all features are causal, see test_lookahead)."""
         df = strategy.add_indicators(df.copy())
         df = strategy.generate_signals(df)
-
         if "atr_14" not in df.columns:
             df["atr_14"] = ta.atr(df["high"], df["low"], df["close"], length=14)
         for col in ("long_exit", "short_exit"):
             df[col] = df[col].fillna(False).astype(bool) if col in df.columns else False
+        df["signal"] = df["signal"].fillna(0).astype(int)
+        return df
 
-        bar_hours = df.index.to_series().diff().median().total_seconds() / 3600 if len(df) > 1 else 1.0
+    def run(self, df, strategy, symbol="BTC/USDT:USDT", capital=None, verbose=True,
+            start=None, end=None) -> BacktestResult:
+        """
+        Event order per bar t (timestamps are candle OPEN times):
+          1. orders decided on the close of bar t-1 are filled at the OPEN of bar t
+             (signal exit / reversal first, then a new entry)
+          2. stop loss / take profit are checked against bar t's range (incl. the entry bar)
+          3. the trailing stop is ratcheted with bar t's high/low (risk.stops, same as live)
+          4. equity is marked at the close of bar t
+          5. the signal on the close of bar t becomes the pending order for bar t+1
+        A signal on the last bar is never filled (there is no next open).
 
-        cash, position = capital, None
-        equity_curve, closed_trades = [], []
+        start / end (optional, end exclusive) restrict TRADING to a window. Indicators are still
+        computed on all rows of `df`, so history before `start` serves as warm-up.
+        """
+        capital = capital or self.initial_capital
+        full = self.prepare(df, strategy)
 
-        for ts, row in df.iterrows():
-            price = row["close"]
+        mask = pd.Series(True, index=full.index)
+        if start is not None:
+            mask &= full.index >= pd.Timestamp(start)
+        if end is not None:
+            mask &= full.index < pd.Timestamp(end)
+        pos_idx = np.flatnonzero(mask.to_numpy())
+        if len(pos_idx) == 0:
+            empty = pd.Series(dtype=float, name="equity")
+            return BacktestResult(equity=empty, trades=pd.DataFrame(), metrics={}, config=self.config)
+        first, last = pos_idx[0], pos_idx[-1]
+        if last - first + 1 != len(pos_idx):
+            raise ValueError("start/end must select a contiguous block of bars")
 
-            # ── Manage open position ──────────────────────────────────────
+        o, h, l, c = (full[k].to_numpy(dtype=float).tolist() for k in ("open", "high", "low", "close"))
+        sig = full["signal"].to_numpy().tolist()
+        lx  = full["long_exit"].to_numpy().tolist()
+        sx  = full["short_exit"].to_numpy().tolist()
+        atr = full["atr_14"].to_numpy(dtype=float).tolist()
+        idx = full.index
+
+        bar_hours = (idx.to_series().diff().median().total_seconds() / 3600) if len(idx) > 1 else 1.0
+
+        cash, position = float(capital), None
+        equity_vals, closed_trades = [], []
+
+        for i in range(first, last + 1):
+            ts = idx[i]
+            # Pending order from the previous bar's close (also when it lies just before `start`)
+            p_sig, p_lx, p_sx, p_atr = (sig[i - 1], lx[i - 1], sx[i - 1], atr[i - 1]) if i > 0 \
+                else (0, False, False, float("nan"))
+
+            # ── 1. Fills at the open ──────────────────────────────────────
             if position is not None:
-                is_long = position.side == "long"
-                d = 1 if is_long else -1
+                is_long  = position.side == "long"
+                opposite = p_sig == (-1 if is_long else 1)
+                if opposite or (p_lx if is_long else p_sx):
+                    position = self._close(position, ts, o[i], "Signal")
+                    cash += self._margin(position) + position.pnl_usdt
+                    closed_trades.append(position)
+                    position = None
 
+            if position is None and p_sig in (1, -1) and cash > 100:
+                side = "long" if p_sig == 1 else "short"
+                ep   = o[i] * (1 + self.slippage if side == "long" else 1 - self.slippage)
+                sz   = self.sizer.calculate(cash, ep, side, None if np.isnan(p_atr) else p_atr)
+                fee  = sz["size"] * ep * self.commission
+                # Margin booked exactly as it is released in _margin() (the sizer's value is rounded)
+                margin = sz["size"] * ep / self.leverage
+                if margin + fee <= cash * 0.95:
+                    cash -= margin + fee
+                    position = Trade(symbol=symbol, side=side, entry_time=ts,
+                                     entry_price=ep, size=sz["size"],
+                                     sl_price=sz["sl_price"], tp_price=sz["tp_price"])
+
+            # ── 2./3. Intrabar stop / take profit, then trailing ──────────
+            if position is not None:
+                d = 1 if position.side == "long" else -1
                 # Funding: longs pay, shorts receive (constant assumed rate)
-                cash -= d * position.size * price * self.funding_8h * bar_hours / 8
+                cash -= d * position.size * c[i] * self.funding_8h * bar_hours / 8
 
-                raw_exit, reason = self._check_exit(position, row)
+                raw_exit, reason = self._check_exit(position, o[i], h[i], l[i])
                 if raw_exit is not None:
                     position = self._close(position, ts, raw_exit, reason)
                     cash += self._margin(position) + position.pnl_usdt
@@ -102,38 +168,24 @@ class BacktestEngine:
                 else:
                     position.sl_price, position.trail_active = update_trailing(
                         position.side, position.entry_price, position.sl_price,
-                        position.trail_active, row["high"], row["low"],
-                        self.trail_act, self.trail_cb)
+                        position.trail_active, h[i], l[i], self.trail_act, self.trail_cb)
 
-            # ── Entry ─────────────────────────────────────────────────────
-            if position is None and cash > 100 and row["signal"] in (1, -1):
-                side = "long" if row["signal"] == 1 else "short"
-                ep   = price * (1 + self.slippage if side == "long" else 1 - self.slippage)
-                atr  = row["atr_14"]
-                sz   = self.sizer.calculate(cash, ep, side, None if pd.isna(atr) else atr)
-                fee  = sz["size"] * ep * self.commission
-
-                if sz["margin"] + fee <= cash * 0.95:
-                    cash -= sz["margin"] + fee
-                    position = Trade(symbol=symbol, side=side, entry_time=ts,
-                                     entry_price=ep, size=sz["size"],
-                                     sl_price=sz["sl_price"], tp_price=sz["tp_price"])
-
-            # ── Equity ────────────────────────────────────────────────────
+            # ── 4. Equity at the close ────────────────────────────────────
             unreal, locked = 0.0, 0.0
-            if position:
+            if position is not None:
                 d = 1 if position.side == "long" else -1
-                unreal = d * (price - position.entry_price) * position.size
+                unreal = d * (c[i] - position.entry_price) * position.size
                 locked = self._margin(position)
-            equity_curve.append((ts, cash + locked + unreal))
+            equity_vals.append(cash + locked + unreal)
 
-        # Close the last open position at the final close
-        if position:
-            position = self._close(position, df.index[-1], df["close"].iloc[-1], "End")
+        # Close a position still open at the end of the window at the final close (with costs)
+        if position is not None:
+            position = self._close(position, idx[last], c[last], "End")
+            cash += self._margin(position) + position.pnl_usdt
             closed_trades.append(position)
+            equity_vals[-1] = cash
 
-        equity  = pd.Series([e for _, e in equity_curve],
-                            index=[t for t, _ in equity_curve], name="equity")
+        equity  = pd.Series(equity_vals, index=idx[first:last + 1], name="equity")
         trades  = self._to_df(closed_trades)
         metrics = calc_all(equity, trades, capital)
 
@@ -150,22 +202,18 @@ class BacktestEngine:
     # ── Exit logic ────────────────────────────────────────────────────────
 
     @staticmethod
-    def _check_exit(pos: Trade, row):
-        """Returns (raw_exit_price, reason) or (None, ""). Stop is checked first (conservative)."""
+    def _check_exit(pos: Trade, open_, high, low):
+        """Intrabar exits. Returns (raw_exit_price, reason) or (None, ""). Stop first (conservative)."""
         is_long = pos.side == "long"
 
-        if (row["low"] <= pos.sl_price) if is_long else (row["high"] >= pos.sl_price):
+        if (low <= pos.sl_price) if is_long else (high >= pos.sl_price):
             # On a gap through the stop we are filled at the open, not at the stop
-            raw = min(row["open"], pos.sl_price) if is_long else max(row["open"], pos.sl_price)
+            raw = min(open_, pos.sl_price) if is_long else max(open_, pos.sl_price)
             return raw, ("TrailingSL" if pos.trail_active else "SL")
 
         if pos.tp_price is not None and \
-           ((row["high"] >= pos.tp_price) if is_long else (row["low"] <= pos.tp_price)):
+           ((high >= pos.tp_price) if is_long else (low <= pos.tp_price)):
             return pos.tp_price, "TP"
-
-        opposite = row["signal"] == (-1 if is_long else 1)
-        if opposite or row["long_exit" if is_long else "short_exit"]:
-            return row["close"], "Signal"
 
         return None, ""
 
@@ -175,7 +223,7 @@ class BacktestEngine:
         d       = 1 if is_long else -1
         pnl     = d * (exit_px - pos.entry_price) * pos.size - exit_px * pos.size * self.commission
         pos.exit_time, pos.exit_price = ts, exit_px
-        pos.pnl_usdt, pos.exit_reason = round(pnl, 4), reason
+        pos.pnl_usdt, pos.exit_reason = pnl, reason
         return pos
 
     def _margin(self, pos: Optional[Trade]) -> float:
