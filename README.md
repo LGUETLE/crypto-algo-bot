@@ -2,6 +2,19 @@
 
 Systematic futures trading bot (Python + ccxt). Exchange-agnostic: OKX Europe (X-Perps), OKX, Bitget, Hyperliquid (experimental).
 
+## Research summary
+
+Two strategies have been evaluated with a look-ahead-free engine, realistic costs (fees, slippage,
+historical funding), walk-forward validation, Deflated Sharpe Ratios and a one-time final hold-out.
+Full method, numbers and limitations: [RESEARCH.md](RESEARCH.md).
+
+| Study | Verdict |
+|---|---|
+| ETH Donchian breakout, 1h ([Part 1](RESEARCH.md#part-1-eth-donchian-breakout-1h)) | **Concluded: no edge after costs.** −69 % on the research period; about 0 % even without any costs |
+| Cross-asset time-series momentum, daily portfolio ([Part 2](RESEARCH.md#part-2-cross-asset-time-series-momentum-daily-portfolio), [preregistration](docs/preregistration.md)) | **No demonstrated edge** under the preregistered rule (DSR 0.86 < 0.95; hold-out Sharpe −0.09). The evidence supports a drawdown-reducing overlay, not demonstrated alpha. Forward paper trading as `tsmom-v1` |
+
+Nothing in this repository is a performance claim beyond these documented, reproducible runs.
+
 ## Features
 - Strategies: Donchian breakout, EMA crossover, RSI mean reversion (pluggable via `BaseStrategy`)
 - ATR-based stop loss, trailing stop, higher-timeframe trend filter ("guardian")
@@ -46,6 +59,11 @@ python main.py --mode live                 # only after weeks of clean paper/dem
 7. Live with a very small amount first
 
 Research results, method and limitations: see [RESEARCH.md](RESEARCH.md).
+
+Portfolio study (cross-asset time-series momentum, daily, point-in-time universe of liquid perps):
+`python main.py --mode tsmom` (research period) and, once, `--final-holdout`. The design and trial
+count are frozen in [docs/preregistration.md](docs/preregistration.md), parameters in
+`config/tsmom.yaml`. Research only: this strategy is not wired into the live bot.
 
 ## Research methodology
 
@@ -108,6 +126,8 @@ crypto-algo-bot/
 │   ├── settings.yaml            Exchange, strategy, risk, backtest parameters
 │   └── pairs.yaml               Active pairs (venue symbol + Binance data symbol)
 ├── data/fetcher.py              Binance history + funding (ccxt, archive fallback, cached parquet)
+├── data/universe.py             OKX X-Perp snapshot, Binance symbol inventory, daily panels
+├── docs/preregistration.md      Frozen design of the TSMOM study (written before any run)
 ├── features/
 │   ├── engineer.py              30+ technical features (exploration; not used by the strategies)
 │   ├── macro.py                 Higher-timeframe trend filter (no look-ahead)
@@ -121,6 +141,8 @@ crypto-algo-bot/
 │   ├── costs.py                 Gross vs net cost report, cost scenarios
 │   ├── benchmark.py             BTC buy & hold, vol-matched BTC, information ratio
 │   ├── research.py              Pipeline: data + hold-out guard, backtest/optimize/hold-out reports
+│   ├── portfolio.py             Multi-asset daily portfolio engine (TSMOM), point-in-time membership
+│   ├── tsmom_research.py        TSMOM study: variants, WFO, DSR (N = 7), benchmarks, hold-out
 │   └── research_log.py          Append-only JSONL research log
 ├── execution/
 │   ├── broker.py                Exchange-agnostic ccxt broker (paper / demo / live)
