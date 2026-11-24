@@ -38,11 +38,12 @@ python main.py --mode live                 # only after weeks of clean paper/dem
 ## Workflow
 
 1. Backtest `python main.py --mode backtest` (configured parameters, research period only)
-2. Optimize `python main.py --mode optimize` (walk-forward optimisation on the research period)
-3. Final hold-out, **once**: `python main.py --mode optimize --final-holdout`
-4. Paper `python main.py --mode paper` (4-8 weeks, compare with the backtest)
-5. Demo `python main.py --mode demo` (tests the real order path: SL, trailing, reduce-only exits)
-6. Live with a very small amount first
+2. Costs `python main.py --mode costs` (gross vs net, turnover, break-even cost, cost scenarios)
+3. Optimize `python main.py --mode optimize` (walk-forward optimisation on the research period)
+4. Final hold-out, **once**: `python main.py --mode optimize --final-holdout`
+5. Paper `python main.py --mode paper` (4-8 weeks, compare with the backtest)
+6. Demo `python main.py --mode demo` (tests the real order path: SL, trailing, reduce-only exits)
+7. Live with a very small amount first
 
 Research results, method and limitations: see [RESEARCH.md](RESEARCH.md).
 
@@ -55,12 +56,20 @@ fetcher uses ccxt (Binance REST) and falls back to the official archive `data.bi
 (SHA-256 verified) where the REST API is not reachable.
 
 **Backtest timing and costs.** Timestamps are candle open times. A signal computed on the close of bar
-*t* is filled at the open of bar *t+1*; stops and the trailing stop (shared with live via
-`risk/stops.py`) are checked intrabar from the entry bar on. As in the live bot, an opposite signal
-only closes a position. Commission and slippage apply per side; funding is settled at each funding
-timestamp against the position held at that moment (longs pay positive rates). Without a funding
-history the engine falls back to the constant `funding_rate_8h` and logs a warning. Trade PnL is net
-of both fees and funding. Strategies get raw OHLCV plus the guardian columns, exactly like the live bot.
+*t* is filled at the open of bar *t+1*. As in the live bot, an opposite signal only closes a position.
+Commission (0.05 % per side, OKX Europe X-Perps taker) and slippage apply per side; funding is settled
+at each funding timestamp against the position held at that moment (longs pay positive rates).
+Without a funding history the engine falls back to the constant `funding_rate_8h` and logs a
+warning. Trade PnL is net of both fees and funding. Strategies get raw OHLCV plus the guardian
+columns, exactly like the live bot.
+
+**Stops = what the exchange does.** Stop loss, trailing stop and take profit are simulated intrabar
+from the entry bar on by `risk/stops.bar_stop_check`, shared by the backtest and the paper broker:
+the stop in force is checked first (a gap fills at the open), the trailing stop ratchets with the
+favourable extreme and fires inside the bar if the adverse extreme reaches it. When the order of high
+and low matters, the backtest replays that bar over 1-minute candles (`backtest.intrabar_timeframe`);
+without them the adverse order is assumed. Live entries set the stop from the actual fill price
+(fill -/+ ATR stop distance) and size with the strategy's own ATR.
 
 **Metrics.** Sharpe/Sortino/volatility are annualised with the bar timeframe (1h: sqrt(8760), 365-day
 year, risk-free rate `backtest.risk_free_rate`, default 0). CAGR uses calendar time.
@@ -82,8 +91,13 @@ raises a `HoldoutReuseWarning`.
 volatility, and the traded asset's buy & hold over the identical bars: return, CAGR, Sharpe, max
 drawdown, Calmar, excess return and information ratio.
 
-**Research log.** Every backtest, grid search, walk-forward study and hold-out evaluation is appended
-to `logs/research_log.jsonl` with parameters, period, metrics, number of trials and git commit.
+**Cost report.** `--mode costs` decomposes a run into gross PnL at mid prices, slippage, fees and
+funding, reports turnover and the break-even cost per round trip, and re-runs it with no costs, fees
+only, fees + slippage, the configured costs and 2x stressed costs.
+
+**Research log.** Every backtest, cost report, grid search, walk-forward study and hold-out
+evaluation is appended to `logs/research_log.jsonl` with parameters, period, metrics, number of
+trials and git commit.
 
 ## Project structure
 
@@ -104,6 +118,7 @@ crypto-algo-bot/
 │   ├── metrics.py               Metrics with timeframe-aware annualisation
 │   ├── optimizer.py             Grid search, walk-forward optimisation
 │   ├── stats.py                 Probabilistic / Deflated Sharpe Ratio
+│   ├── costs.py                 Gross vs net cost report, cost scenarios
 │   ├── benchmark.py             BTC buy & hold, vol-matched BTC, information ratio
 │   ├── research.py              Pipeline: data + hold-out guard, backtest/optimize/hold-out reports
 │   └── research_log.py          Append-only JSONL research log
@@ -112,10 +127,12 @@ crypto-algo-bot/
 │   └── order_manager.py         Persistent positions + exchange sync (SQLite)
 ├── risk/
 │   ├── position_sizer.py        ATR-based, risk-based sizing
-│   ├── stops.py                 Trailing stop logic (shared by backtest and live)
+│   ├── stops.py                 Intrabar stop / trailing / TP simulation (shared by backtest and paper)
 │   └── guard.py                 Kill switch, position slots, portfolio risk budget
 ├── notify/telegram_bot.py       Telegram alerts
-├── scripts/list_markets.py      Find the right derivative symbol on the venue
+├── scripts/
+│   ├── list_markets.py          Find the right derivative symbol on the venue
+│   └── audit_holdout_bar.py     One-time audit of the ETH hold-out (already run, logged)
 └── tests/                       pytest suite
 ```
 
