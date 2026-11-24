@@ -1,8 +1,8 @@
 """
 crypto-algo-bot - entry point
 =============================
-python main.py --mode backtest [--symbol ETH]
-python main.py --mode optimize [--symbol ETH]
+python main.py --mode backtest [--symbol ETH] [--final-holdout]
+python main.py --mode optimize [--symbol ETH] [--final-holdout]
 python main.py --mode paper      simulated fills and stops
 python main.py --mode demo       exchange demo account (real order path, fake money)
 python main.py --mode live       real money
@@ -43,17 +43,8 @@ def macro_timeframe(config: dict):
 
 
 def get_strategy(config: dict, strategy_name: str = None):
-    name = strategy_name or config.get("strategy", "donchian_breakout")
-    if name == "donchian_breakout":
-        from strategies.donchian_breakout import DonchianBreakoutStrategy
-        return DonchianBreakoutStrategy(config)
-    if name == "rsi_mean_reversion":
-        from strategies.rsi_mean_reversion import RSIMeanReversionStrategy
-        return RSIMeanReversionStrategy(config)
-    if name == "ema_crossover":
-        from strategies.ema_crossover import EmaCrossoverStrategy
-        return EmaCrossoverStrategy(config)
-    raise ValueError(f"Unknown strategy: {name}")
+    from strategies.registry import get_strategy as _get
+    return _get(config, strategy_name)
 
 
 def latest_atr(df: pd.DataFrame, length: int = 14):
@@ -155,87 +146,28 @@ def daily_summary(broker):
     notify_daily_summary(capital, summary["total_pnl"], summary["total_trades"], win_rate)
 
 
-# ── Backtest ──────────────────────────────────────────────────────────────────
+# ── Research (backtest / optimize) ───────────────────────────────────────────
+# See backtesting/research.py. The final hold-out (backtest.holdout_start) is only read with
+# --final-holdout; every hold-out evaluation is logged and a repeated one triggers a warning.
 
-def run_backtest(config, pairs, symbol_filter=None):
+def _target_pairs(pairs, symbol_filter):
+    return [p for p in pairs if symbol_filter is None or symbol_filter.upper() in p["symbol"]]
+
+
+def run_backtest(config, pairs, symbol_filter=None, final_holdout=False):
     from data.fetcher import DataFetcher
-    from features.engineer import FeatureEngineer
-    from backtesting.engine import BacktestEngine
-
+    from backtesting import research
     fetcher = DataFetcher(config["exchange"])
-    engine  = BacktestEngine(config)
-    days    = config["backtest"]["lookback_days"]
-    target  = [p for p in pairs if symbol_filter is None or symbol_filter.upper() in p["symbol"]]
-
-    for pair in target:
-        data_symbol = pair.get("data_symbol", pair["symbol"])    # Binance history as price proxy
-        strat_name  = pair.get("strategy", config.get("strategy"))
-
-        print(f"\n{'=' * 60}\n  BACKTEST: {data_symbol} | {strat_name} | {days} days\n{'=' * 60}")
-
-        df = fetcher.historical(data_symbol, config["timeframe"], days=days, macro_tf=macro_timeframe(config))
-        df = FeatureEngineer(config).transform(df)
-        strategy = get_strategy(config, strat_name)
-
-        engine.run(df, strategy, symbol=data_symbol)
-        wf = engine.split_consistency_check(df, strategy, symbol=data_symbol)
-        logger.info(f"OOS consistency: {wf['consistency']:.0%} | avg OOS Sharpe: {wf['avg_oos_sharpe']:.2f}")
+    for pair in _target_pairs(pairs, symbol_filter):
+        research.run_backtest(config, pair, fetcher, final_holdout=final_holdout)
 
 
-# ── Optimizer ─────────────────────────────────────────────────────────────────
-
-def run_optimize(config, pairs, symbol_filter=None):
+def run_optimize(config, pairs, symbol_filter=None, final_holdout=False):
     from data.fetcher import DataFetcher
-    from features.engineer import FeatureEngineer
-    from backtesting.engine import BacktestEngine
-    from backtesting.optimizer import ParameterOptimizer
-
-    fetcher   = DataFetcher(config["exchange"])
-    engine    = BacktestEngine(config)
-    optimizer = ParameterOptimizer(config, engine)
-    days      = config["backtest"]["lookback_days"]
-    target    = [p for p in pairs if symbol_filter is None or symbol_filter.upper() in p["symbol"]]
-
-    for pair in target:
-        data_symbol = pair.get("data_symbol", pair["symbol"])
-        strat_name  = pair.get("strategy", config.get("strategy"))
-
-        print(f"\n{'=' * 60}\n  OPTIMIZATION: {data_symbol} | {strat_name} | {days} days\n{'=' * 60}")
-
-        df = fetcher.historical(data_symbol, config["timeframe"], days=days, macro_tf=macro_timeframe(config))
-        df = FeatureEngineer(config).transform(df)
-
-        if strat_name == "donchian_breakout":
-            from strategies.donchian_breakout import DonchianBreakoutStrategy
-            strategy_class = DonchianBreakoutStrategy
-            param_grid = {
-                "dc_enter":      [20, 30, 40, 50],
-                "dc_exit":       [5, 10, 15],
-                "adx_threshold": [20, 25, 30],
-                "atr_min_mult":  [0.3, 0.5, 0.7],
-            }
-        elif strat_name == "rsi_mean_reversion":
-            from strategies.rsi_mean_reversion import RSIMeanReversionStrategy
-            strategy_class = RSIMeanReversionStrategy
-            param_grid = {
-                "rsi_oversold":   [25, 30, 35],
-                "rsi_overbought": [65, 70, 75],
-                "rsi_exit_long":  [50, 55, 60],
-                "rsi_exit_short": [40, 45, 50],
-                "adx_max":        [25, 30, 35],
-            }
-        else:
-            logger.error(f"No param_grid for {strat_name}")
-            continue
-
-        results = optimizer.grid_search(df, strategy_class, param_grid, min_trades=20, symbol=data_symbol)
-        if results.empty:
-            logger.error(f"No valid results for {data_symbol}")
-            continue
-
-        best = optimizer.best_params(results, metric="sharpe")
-        logger.info(f"Best parameters for {data_symbol}: {best}")
-        optimizer.validate_best(df, strategy_class, best, symbol=data_symbol)
+    from backtesting import research
+    fetcher = DataFetcher(config["exchange"])
+    for pair in _target_pairs(pairs, symbol_filter):
+        research.run_optimize(config, pair, fetcher, final_holdout=final_holdout)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -244,6 +176,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["paper", "demo", "live", "backtest", "optimize"], default="paper")
     parser.add_argument("--symbol", default=None)
+    parser.add_argument("--final-holdout", action="store_true",
+                        help="backtest/optimize: evaluate the final hold-out period (logged; do it ONCE)")
     args   = parser.parse_args()
     config = load_config()
     pairs  = load_pairs()
@@ -253,11 +187,13 @@ def main():
     logger.info(f"Pairs: {[(p['symbol'], p.get('strategy', '?')) for p in pairs]}")
     logger.info("=" * 50)
 
+    if args.final_holdout and args.mode not in ("backtest", "optimize"):
+        parser.error("--final-holdout only applies to --mode backtest / optimize")
     if args.mode == "backtest":
-        run_backtest(config, pairs, symbol_filter=args.symbol)
+        run_backtest(config, pairs, symbol_filter=args.symbol, final_holdout=args.final_holdout)
         return
     if args.mode == "optimize":
-        run_optimize(config, pairs, symbol_filter=args.symbol)
+        run_optimize(config, pairs, symbol_filter=args.symbol, final_holdout=args.final_holdout)
         return
 
     from execution.broker import Broker
