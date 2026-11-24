@@ -166,6 +166,7 @@ class ParameterOptimizer:
         n_variants:     int = 1,          # WFO configurations tried on this data (for the OOS DSR)
         strategy_name:  Optional[str] = None,
         study_id:       Optional[str] = None,
+        extra_settings: Optional[dict] = None,     # logged with the study (e.g. config fingerprint)
         verbose:        bool = True,
     ) -> WFOResult:
         capital  = capital or self.engine.initial_capital
@@ -250,12 +251,20 @@ class ParameterOptimizer:
                                                metrics["skew"], metrics["kurtosis"], n_variants, v_mean)
         metrics["dsr_n_variants"]    = n_variants
         metrics["trial_sr_variance"] = v_mean
+        # Positions still open at an OOS window end are force-closed ("End") and the next window
+        # starts flat; the live bot would keep them. Report how much that matters.
+        last_w = windows[-1].n
+        forced = trades[(trades["exit_reason"] == "End") & (trades["window"] != last_w)] \
+            if not trades.empty else trades
+        metrics["window_end_exits"]    = int(len(forced))
+        metrics["window_end_exit_pnl"] = float(forced["pnl_usdt"].sum()) if len(forced) else 0.0
 
         windows_df = pd.DataFrame(rows)
         stability  = param_stability(windows_df, keys)
         settings   = {"mode": mode, "is_months": is_months, "oos_months": oos_months,
                       "step_months": step_months or oos_months, "metric": metric, "min_trades": min_trades,
-                      "max_dd_limit": max_dd_limit, "param_grid": param_grid, "n_trials_per_window": n_trials}
+                      "max_dd_limit": max_dd_limit, "param_grid": param_grid, "n_trials_per_window": n_trials,
+                      **(extra_settings or {})}
         result = WFOResult(mode, windows_df, equity, trades, metrics, stability, settings)
 
         if self.log is not None:
@@ -323,6 +332,7 @@ def param_stability(windows: pd.DataFrame, keys: list) -> dict:
 def _summary(m: dict) -> dict:
     keys = ("total_return", "cagr", "sharpe", "sortino", "calmar", "max_drawdown", "volatility",
             "total_trades", "win_rate", "profit_factor", "psr", "dsr", "dsr_n_variants",
+        "window_end_exits", "window_end_exit_pnl",
             "sharpe_per_period", "skew", "kurtosis", "n_periods", "trial_sr_variance")
     return {k: m.get(k) for k in keys}
 
@@ -348,6 +358,8 @@ def print_wfo(r: WFOResult):
           f"max DD {m['max_drawdown']:.1%} | trades {m.get('total_trades', 0)}")
     print(f"  PSR(SR>0) {m['psr']:.3f} | DSR {m['dsr']:.3f} (N={m['dsr_n_variants']} WFO variant(s), "
           f"V[SR]={m['trial_sr_variance']:.2e} per bar from the IS trials)")
+    print(f"  Forced exits at OOS window ends (live would keep the position): {m['window_end_exits']} "
+          f"trades, net PnL {m['window_end_exit_pnl']:+.2f}")
     s = r.stability
     if s.get("n_selected"):
         print(f"  Parameter stability: {s['n_distinct_sets']} distinct sets in {s['n_selected']} windows, "

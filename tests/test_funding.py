@@ -103,3 +103,11 @@ def test_equity_reflects_funding_when_flat_price():
     n_events = int(((idx > idx[2]) & idx.hour.isin((0, 8, 16))).sum())
     assert t["funding"] == pytest.approx(-n_events * t["size"] * 100 * 0.001)
     assert np.isclose(res.equity.iloc[-1], 10_000 + t["pnl_usdt"])
+
+
+def test_funding_series_not_covering_window_warns(caplog):
+    df = ohlcv(100)
+    partial = _events(df, 0.001).iloc[:3]                      # ends after ~1 day of 4
+    with caplog.at_level(logging.WARNING):
+        _run(df, {3: 1}, exits=[90], funding=partial)
+    assert any("does not cover" in r.message for r in caplog.records)

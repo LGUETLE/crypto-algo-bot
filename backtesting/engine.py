@@ -303,6 +303,12 @@ class BacktestEngine:
                 self._warned_const = True
             times = pd.date_range(lo.floor("8h"), hi, freq="8h")
             funding = pd.Series(self.funding_8h, index=times)
+        else:
+            tol = pd.Timedelta(hours=8) + bar
+            if funding.empty or funding.index[0] > idx[first] + tol or funding.index[-1] < idx[last] - tol:
+                span = "empty" if funding.empty else f"{funding.index[0]} - {funding.index[-1]}"
+                logger.warning(f"Funding series ({span}) does not cover the trading window "
+                               f"{idx[first]} - {idx[last]}: uncovered periods are charged NO funding")
         f = funding[(funding.index > lo) & (funding.index <= hi)]
         if f.empty:
             return out

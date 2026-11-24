@@ -49,7 +49,7 @@ class FakeFetcher:
         idx = pd.date_range(start, end, freq="8h", tz="UTC", inclusive="left")
         s = pd.Series(0.0001, index=idx)
         if self.poison_after is not None:
-            s[s.index >= self.poison_after] = 0.05
+            s[s.index > self.poison_after] = 0.05   # the event AT hs belongs to the research period
         return s
 
 
@@ -76,7 +76,7 @@ PAIR = {"symbol": "ETH/USDT:USDT", "data_symbol": "ETH/USDT:USDT", "strategy": "
 
 def test_holdout_is_cut_from_prices_funding_and_benchmark(tmp_path):
     d = research.load_research_data(_config(tmp_path), PAIR, FakeFetcher())
-    assert d.df.index.max() < HS and d.funding.index.max() < HS and d.btc.index.max() < HS
+    assert d.df.index.max() < HS and d.funding.index.max() <= HS and d.btc.index.max() < HS
     full = research.load_research_data(_config(tmp_path), PAIR, FakeFetcher(), final_holdout=True)
     assert full.df.index.max() >= HS
 
@@ -165,3 +165,22 @@ def test_live_window_signals_match_full_history():
             mismatches += int(live["signal"].iloc[-1] != full.loc[ts, "signal"]
                               or live["long_exit"].iloc[-1] != full.loc[ts, "long_exit"])
         assert mismatches == 0
+
+
+def test_optimize_runs_without_holdout_start(tmp_path, capsys):
+    cfg = _config(tmp_path)
+    del cfg["backtest"]["holdout_start"]
+    out = research.run_optimize(cfg, PAIR, FakeFetcher())
+    assert "rolling" in out["wfo"]
+
+
+def test_funding_event_at_holdout_start_belongs_to_research_period(tmp_path):
+    d = research.load_research_data(_config(tmp_path), PAIR, FakeFetcher())
+    assert d.funding.index.max() == HS            # settled against the position held at HS
+    assert d.df.index.max() < HS
+
+
+def test_wfo_reports_forced_window_end_exits(tmp_path):
+    out = research.run_optimize(_config(tmp_path), PAIR, FakeFetcher())
+    m = out["wfo"]["rolling"]["wfo"].metrics
+    assert "window_end_exits" in m and "window_end_exit_pnl" in m

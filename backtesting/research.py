@@ -81,6 +81,29 @@ def cut_holdout(obj, hs: Optional[pd.Timestamp]):
     return obj[obj.index < hs]
 
 
+def cut_funding(funding: Optional[pd.Series], hs: Optional[pd.Timestamp]):
+    """Funding events up to AND including hs: the event at hs is paid by the position held at hs,
+    i.e. by the research period's last position (the rate is known at hs, no hold-out prices)."""
+    if hs is None or funding is None:
+        return funding
+    return funding[funding.index <= hs]
+
+
+CONFIG_FINGERPRINT_EXCLUDE = {"exchange", "market_type", "margin_currency", "log_level", "futures",
+                              "optimize", "strategy"}
+BACKTEST_FINGERPRINT_EXCLUDE = {"research_log", "walk_forward_pct", "lookback_days"}
+
+
+def config_fingerprint(config: dict, grid_keys=()) -> str:
+    """Hash of every setting that changes a backtest result except the optimised parameters:
+    fixed strategy params, risk, costs, data window, timeframe, guardian."""
+    import hashlib
+    snap = {k: v for k, v in config.items() if k not in CONFIG_FINGERPRINT_EXCLUDE and k not in grid_keys}
+    snap["backtest"] = {k: v for k, v in config.get("backtest", {}).items()
+                        if k not in BACKTEST_FINGERPRINT_EXCLUDE}
+    return hashlib.sha256(json.dumps(snap, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
 def macro_timeframe(config: dict):
     return config.get("macro_timeframe") if config.get("use_macro_filter", True) else None
 
@@ -125,7 +148,7 @@ def load_research_data(config: dict, pair: dict, fetcher, final_holdout: bool = 
     btc = df if data_symbol.split(":")[0] == BTC.split(":")[0] else fetcher.ohlcv_range(BTC, tf, start, end)
 
     if not final_holdout:
-        df, funding, btc = cut_holdout(df, hs), cut_holdout(funding, hs), cut_holdout(btc, hs)
+        df, funding, btc = cut_holdout(df, hs), cut_funding(funding, hs), cut_holdout(btc, hs)
         if hs is not None:
             logger.info(f"Hold-out from {hs:%Y-%m-%d} is excluded (pass --final-holdout to evaluate it)")
     return ResearchData(data_symbol, df, funding, btc, hs, final_holdout)
@@ -202,18 +225,26 @@ def _print_trades_summary(res):
 
 # ── Walk-forward optimisation ─────────────────────────────────────────────────
 
-def _variant_key(settings: dict) -> str:
+def _variant_key(settings: dict, fingerprint: Optional[str]) -> str:
     keys = ("mode", "is_months", "oos_months", "step_months", "metric", "min_trades", "max_dd_limit",
             "param_grid")
-    return json.dumps({k: settings.get(k) for k in keys}, sort_keys=True, default=str)
+    return json.dumps({**{k: settings.get(k) for k in keys}, "config": fingerprint},
+                      sort_keys=True, default=str)
 
 
 def count_wfo_variants(log: ResearchLog, strategy: str, symbol: str, timeframe: str,
-                       current: list) -> int:
-    """Distinct WFO configurations ever evaluated on this strategy/symbol/timeframe (incl. current)."""
-    seen = {_variant_key(e.get("settings") or {}) for e in
-            log.entries("wfo_study", strategy=strategy, symbol=symbol, timeframe=timeframe)}
-    seen |= {_variant_key(s) for s in current}
+                       current: list, fingerprint: str) -> int:
+    """
+    Distinct WFO configurations ever evaluated on this strategy/symbol/timeframe (incl. current).
+    A variant = WFO settings + config fingerprint (fixed strategy params, risk, costs, data window).
+    Log entries written before fingerprints existed are assumed to have used the current config.
+    Only this local log is counted: trials on other symbols/strategies or in other clones are not.
+    """
+    seen = set()
+    for e in log.entries("wfo_study", strategy=strategy, symbol=symbol, timeframe=timeframe):
+        s = e.get("settings") or {}
+        seen.add(_variant_key(s, s.get("config_fingerprint", fingerprint)))
+    seen |= {_variant_key(s, fingerprint) for s in current}
     return len(seen)
 
 
@@ -227,11 +258,14 @@ def run_optimize(config: dict, pair: dict, fetcher, final_holdout: bool = False,
     cls        = _strategy_class(config, strat_name)
     tf         = config["timeframe"]
 
+    fp      = config_fingerprint(config, s["param_grid"].keys())
     current = [{**s, "mode": m, "step_months": s["oos_months"]} for m in s["modes"]]
-    n_var   = count_wfo_variants(log, strat_name, data.symbol, tf, current)
+    n_var   = count_wfo_variants(log, strat_name, data.symbol, tf, current, fp)
+    excluded = f"hold-out from {data.holdout_start:%Y-%m-%d} excluded" if data.holdout_start is not None \
+        else "NO hold-out configured"
     print(f"\n{'=' * 60}\n  WALK-FORWARD OPTIMISATION: {data.symbol} | {strat_name}\n"
           f"  research period {data.df.index[0]:%Y-%m-%d} - {data.df.index[-1]:%Y-%m-%d} "
-          f"(hold-out from {data.holdout_start:%Y-%m-%d} excluded)\n{'=' * 60}")
+          f"({excluded})\n{'=' * 60}")
 
     results = {}
     for mode in s["modes"]:
@@ -240,7 +274,7 @@ def run_optimize(config: dict, pair: dict, fetcher, final_holdout: bool = False,
             data.df, cls, s["param_grid"], symbol=data.symbol, funding=data.funding, mode=mode,
             is_months=s["is_months"], oos_months=s["oos_months"], metric=s["metric"],
             min_trades=s["min_trades"], max_dd_limit=s["max_dd_limit"], n_variants=n_var,
-            strategy_name=strat_name, study_id=study)
+            strategy_name=strat_name, study_id=study, extra_settings={"config_fingerprint": fp})
         table = _benchmarks(config, engine, data, r.equity, engine.initial_capital,
                             f"BENCHMARKS - stitched OOS ({mode})")
         log.append("wfo_benchmarks", study_id=study, strategy=strat_name, symbol=data.symbol, timeframe=tf,
@@ -291,7 +325,7 @@ def evaluate_holdout(config: dict, pair: dict, fetcher, log=None) -> dict:
     is_start  = full.df.index[0] if mode == "anchored" else hs - pd.DateOffset(months=s["is_months"])
 
     research_df = cut_holdout(full.df, hs)                 # fitting never sees hold-out rows
-    research_f  = cut_holdout(full.funding, hs)
+    research_f  = cut_funding(full.funding, hs)
     trials = optimizer.evaluate_grid(research_df, cls, s["param_grid"], is_start, hs, research_f, full.symbol)
     valid  = optimizer.filter_valid(trials, s["min_trades"], s["max_dd_limit"])
     if valid.empty:
