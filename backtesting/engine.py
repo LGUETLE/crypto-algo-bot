@@ -27,7 +27,7 @@ import pandas_ta as ta
 from backtesting.metrics import calc_all, infer_periods_per_year, periods_per_year, print_report
 from features.timeframes import to_timedelta
 from risk.position_sizer import PositionSizer
-from risk.stops import bar_stop_check
+from risk.stops import bar_stop_check, update_trailing
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,8 @@ class BacktestEngine:
 
     def run(self, df, strategy, symbol="BTC/USDT:USDT", capital=None, verbose=True,
             start=None, end=None, funding: Optional[pd.Series] = None,
-            state: Optional[dict] = None, close_at_end: bool = True) -> BacktestResult:
+            state: Optional[dict] = None, close_at_end: bool = True,
+            intrabar: Optional[pd.DataFrame] = None) -> BacktestResult:
         """
         Event order per bar t (timestamps are candle OPEN times):
           1. orders decided on the close of bar t-1 are filled at the OPEN of bar t:
@@ -124,6 +125,12 @@ class BacktestEngine:
 
         start / end (optional, end exclusive) restrict TRADING to a window. Indicators are still
         computed on all rows of `df`, so history before `start` serves as warm-up.
+
+        intrabar: optional lower-timeframe candles (e.g. 1m) of the same instrument. When a bar's
+        outcome depends on the unknown high/low order (a stop, an armed trailing stop or the take
+        profit is touched), the position is replayed over the intrabar candles of that bar with the
+        same bar_stop_check (adverse order only within each small candle). Without intrabar data,
+        or if it is missing for that bar, the adverse rule on the full bar applies.
 
         state / close_at_end: hand an open position from one run to the next (walk-forward windows).
         With close_at_end=False an open position stays open (equity marked to the last close) and
@@ -154,6 +161,10 @@ class BacktestEngine:
         idx = full.index
 
         fund = self._funding_per_bar(idx, first, last, funding)
+        ib = self._intrabar_arrays(intrabar)
+        bar_ns = (to_timedelta(self.timeframe) if self.timeframe else
+                  (idx[1] - idx[0] if len(idx) > 1 else pd.Timedelta("1h"))).value
+        idx_ns = idx.as_unit("ns").asi8              # pandas 3 may store us/ms: compare in ns
 
         cash, position = float(capital), None
         if state:
@@ -201,9 +212,13 @@ class BacktestEngine:
 
             # ── 2./3. Intrabar stop / take profit, then trailing ──────────
             if position is not None:
-                raw_exit, reason, position.sl_price, position.trail_active = bar_stop_check(
-                    position.side, position.entry_price, position.sl_price, position.trail_active,
-                    o[i], h[i], l[i], self.trail_act, self.trail_cb, position.tp_price)
+                if ib is not None and self._order_matters(position, h[i], l[i]):
+                    raw_exit, reason, position.sl_price, position.trail_active = self._replay_intrabar(
+                        position, ib, idx_ns[i], idx_ns[i] + bar_ns, o[i], h[i], l[i])
+                else:
+                    raw_exit, reason, position.sl_price, position.trail_active = bar_stop_check(
+                        position.side, position.entry_price, position.sl_price, position.trail_active,
+                        o[i], h[i], l[i], self.trail_act, self.trail_cb, position.tp_price)
                 if raw_exit is not None:
                     position = self._close(position, ts, raw_exit, reason)
                     cash += self._released(position)
@@ -247,6 +262,41 @@ class BacktestEngine:
                               state={"cash": cash, "position": position})
 
     # ── Exit logic ────────────────────────────────────────────────────────
+
+    # ── Intrabar path ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _intrabar_arrays(intrabar: Optional[pd.DataFrame]):
+        if intrabar is None or len(intrabar) == 0:
+            return None
+        return (intrabar.index.as_unit("ns").asi8, intrabar["open"].to_numpy(dtype=float),
+                intrabar["high"].to_numpy(dtype=float), intrabar["low"].to_numpy(dtype=float))
+
+    def _order_matters(self, pos: Trade, high, low) -> bool:
+        """True if the bar's outcome could depend on the order of high and low."""
+        is_long = pos.side == "long"
+        if (low <= pos.sl_price) if is_long else (high >= pos.sl_price):
+            return True
+        if pos.tp_price is not None and ((high >= pos.tp_price) if is_long else (low <= pos.tp_price)):
+            return True
+        new_sl, new_act = update_trailing(pos.side, pos.entry_price, pos.sl_price, pos.trail_active,
+                                          high, low, self.trail_act, self.trail_cb)
+        return new_act and new_sl != pos.sl_price and ((low <= new_sl) if is_long else (high >= new_sl))
+
+    def _replay_intrabar(self, pos: Trade, ib, t0, t1, o, h, l):
+        ts_arr, io, ih, il = ib
+        a, b = np.searchsorted(ts_arr, t0, "left"), np.searchsorted(ts_arr, t1, "left")
+        if b <= a:                                   # no intrabar data for this bar
+            return bar_stop_check(pos.side, pos.entry_price, pos.sl_price, pos.trail_active,
+                                  o, h, l, self.trail_act, self.trail_cb, pos.tp_price)
+        sl, active = pos.sl_price, pos.trail_active
+        for j in range(a, b):
+            raw, reason, sl, active = bar_stop_check(pos.side, pos.entry_price, sl, active,
+                                                     io[j], ih[j], il[j], self.trail_act, self.trail_cb,
+                                                     pos.tp_price)
+            if raw is not None:
+                return raw, reason, sl, active
+        return None, "", sl, active
 
     def _close(self, pos: Trade, ts, raw_price, reason) -> Trade:
         """Sets exit price/fee and the NET trade PnL (price PnL - entry fee - exit fee + funding)."""
@@ -321,7 +371,7 @@ class BacktestEngine:
     # ── Split consistency check (fixed parameters, NO re-fit) ─────────────
 
     def split_consistency_check(self, df, strategy, symbol="BTC/USDT:USDT", n_splits=5,
-                                funding: Optional[pd.Series] = None) -> dict:
+                                funding: Optional[pd.Series] = None, intrabar=None) -> dict:
         """
         Cuts the data into n_splits consecutive blocks and runs the SAME (fixed) parameters on the
         first part (labelled IS) and the last walk_forward_pct of each block (labelled OOS).
@@ -341,8 +391,9 @@ class BacktestEngine:
                 continue
             upto  = df[df.index <= part.index[-1]]          # earlier rows serve as indicator warm-up
             ir  = self.run(upto, strategy, symbol, verbose=False, start=part.index[0],
-                           end=part.index[sp], funding=funding)
-            oor = self.run(upto, strategy, symbol, verbose=False, start=part.index[sp], funding=funding)
+                           end=part.index[sp], funding=funding, intrabar=intrabar)
+            oor = self.run(upto, strategy, symbol, verbose=False, start=part.index[sp], funding=funding,
+                           intrabar=intrabar)
             results.append({
                 "split": i + 1,
                 "is_sharpe":  ir.metrics.get("sharpe", 0),

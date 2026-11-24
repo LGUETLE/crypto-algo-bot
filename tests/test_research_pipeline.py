@@ -197,3 +197,13 @@ def test_cost_report_respects_holdout_guard(tmp_path):
     research.run_costs(cfg, PAIR, FakeFetcher(), final_holdout=True, log=log)
     with pytest.warns(research.HoldoutReuseWarning):
         research.evaluate_holdout(cfg, PAIR, FakeFetcher(), log=log)
+
+
+def test_intrabar_data_is_cut_at_holdout_and_poisoning_has_no_effect(tmp_path):
+    cfg = _config(tmp_path)
+    cfg["backtest"]["intrabar_timeframe"] = "1h"           # finer than the 4h test bars
+    d = research.load_research_data(cfg, PAIR, FakeFetcher())
+    assert d.intrabar is not None and d.intrabar.index.max() < HS
+    a = research.run_backtest(cfg, PAIR, FakeFetcher())
+    b = research.run_backtest(cfg, PAIR, FakeFetcher(poison_after=HS))
+    pd.testing.assert_series_equal(a["result"].equity, b["result"].equity)

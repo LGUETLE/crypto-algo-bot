@@ -181,3 +181,54 @@ def test_live_sizing_uses_strategy_atr(monkeypatch):
     s = DonchianBreakoutStrategy(cfg)
     expected = BacktestEngine.prepare(df, s)["atr_14"].iloc[-1]
     assert main.signal_atr(s, df) == pytest.approx(expected)
+
+
+# ── intrabar path resolution with lower-timeframe data ───────────────────────
+
+def _hour_with_minutes(path):
+    """1h frame (bar 3 = the ambiguous hour) + 1m frame whose bar-3 minutes follow `path`."""
+    idx = pd.date_range("2024-01-01", periods=10, freq="1h", tz="UTC")
+    px = np.full(10, 100.0)
+    h1 = pd.DataFrame({"open": px, "high": px, "low": px, "close": px, "volume": 1.0}, index=idx)
+    h1.iloc[3, h1.columns.get_indexer(["open", "high", "low", "close"])] = [100.0, 103.0, 99.6, 102.8]
+    m_idx = pd.date_range(idx[0], idx[-1] + pd.Timedelta("59min"), freq="1min", tz="UTC")
+    m = pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0}, index=m_idx)
+    hour = m.index[(m.index >= idx[3]) & (m.index < idx[4])]
+    prev = 100.0
+    for k, p in enumerate(path):          # one minute candle per step: open = previous close
+        m.loc[hour[k], ["open", "high", "low", "close"]] = [prev, max(prev, p), min(prev, p), p]
+        prev = p
+    m.loc[hour[len(path):], ["open", "high", "low", "close"]] = path[-1]
+    return h1, m
+
+
+UP = [100.4, 100.8, 101.2, 101.6, 102.0, 102.4, 102.8, 103.0]    # steps smaller than the callback
+
+
+def _cfg():
+    return {**CONFIG, "risk": {**CONFIG["risk"], "trailing_activation": 0.01, "trailing_callback": 0.005}}
+
+
+def test_minute_path_low_first_keeps_position():
+    h1, m = _hour_with_minutes([99.6, 100.0] + UP + [102.8])          # low BEFORE high, close > trail
+    cfg = _cfg()
+    res = BacktestEngine(cfg).run(h1, ScriptedStrategy(cfg, entries={1: 1}), verbose=False, intrabar=m)
+    # the hourly adverse rule would exit inside bar 3; the minute path shows it did not
+    assert res.trades.iloc[0]["exit_time"] == h1.index[4]
+
+
+def test_minute_path_high_first_exits_at_trail():
+    h1, m = _hour_with_minutes(UP + [102.0, 99.6, 102.8])              # high, then drop through trail
+    cfg = _cfg()
+    res = BacktestEngine(cfg).run(h1, ScriptedStrategy(cfg, entries={1: 1}), verbose=False, intrabar=m)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "TrailingSL" and t["exit_time"] == h1.index[3]
+    assert t["exit_price"] == pytest.approx(103 * 0.995 * (1 - CONFIG["backtest"]["slippage"]))
+
+
+def test_without_minute_data_falls_back_to_adverse_rule():
+    h1, m = _hour_with_minutes([99.6, 100.0] + UP + [102.8])
+    cfg = _cfg()
+    res = BacktestEngine(cfg).run(h1, ScriptedStrategy(cfg, entries={1: 1}), verbose=False,
+                                  intrabar=m[m.index < h1.index[3]])
+    assert res.trades.iloc[0]["exit_reason"] == "TrailingSL"

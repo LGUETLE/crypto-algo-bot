@@ -54,6 +54,8 @@ backtest:
   slippage:         0.0002     # per side
   funding_rate_8h:  0.0001     # FALLBACK only, if historical funding cannot be loaded (warns)
   risk_free_rate:   0.0        # annual, used in Sharpe/Sortino (0 = crypto convention)
+  intrabar_timeframe: "1m"     # replay stop/trailing/TP over 1m candles when the high/low order
+                               # of a bar matters (null = adverse-order rule on the full bar)
   research_log:     logs/research_log.jsonl
 
 # ── Optimisation (walk-forward) ───────────────

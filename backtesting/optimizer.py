@@ -98,19 +98,21 @@ class ParameterOptimizer:
     # ── Grid search on one window ─────────────────────────────────────────
 
     def evaluate_grid(self, df, strategy_class: Type, param_grid: dict, start=None, end=None,
-                      funding=None, symbol="BTC/USDT:USDT") -> pd.DataFrame:
+                      funding=None, symbol="BTC/USDT:USDT", intrabar=None) -> pd.DataFrame:
         """Runs EVERY combination on [start, end) and returns all trials (also the failed ones)."""
         keys   = list(param_grid.keys())
         combos = list(itertools.product(*param_grid.values()))
         if end is not None:
             df = df[df.index < pd.Timestamp(end)]          # hard guarantee: nothing after the window
+            if intrabar is not None:
+                intrabar = intrabar[intrabar.index < pd.Timestamp(end)]
         rows = []
         for combo in combos:
             params = dict(zip(keys, combo))
             strat  = strategy_class({**self.config, **params})
             try:
                 m = self.engine.run(df, strat, symbol, verbose=False, start=start, end=end,
-                                    funding=funding).metrics
+                                    funding=funding, intrabar=intrabar).metrics
             except Exception as e:                          # noqa: BLE001 - a broken combo is a failed trial
                 logger.warning(f"{params}: {e}")
                 m = {}
@@ -170,6 +172,7 @@ class ParameterOptimizer:
         *,
         symbol:         str = "BTC/USDT:USDT",
         funding:        Optional[pd.Series] = None,
+        intrabar:       Optional[pd.DataFrame] = None,
         mode:           str = "rolling",
         is_months:      int = 12,
         oos_months:     int = 3,
@@ -199,7 +202,8 @@ class ParameterOptimizer:
         equity_now = capital
         carry = None             # open position handed from one OOS window to the next
         for w in windows:
-            trials = self.evaluate_grid(df, strategy_class, param_grid, w.is_start, w.is_end, funding, symbol)
+            trials = self.evaluate_grid(df, strategy_class, param_grid, w.is_start, w.is_end, funding, symbol,
+                                        intrabar=intrabar)
             valid  = self.filter_valid(trials, min_trades, max_dd_limit)
             sr_bar = trials["sharpe_per_period"].astype(float)
             v_sr   = float(sr_bar[np.isfinite(sr_bar)].var(ddof=1)) if np.isfinite(sr_bar).sum() > 1 else 0.0
@@ -214,7 +218,7 @@ class ParameterOptimizer:
                 params = None
                 res = self.engine.run(oos_df, FlatStrategy(self.config), symbol, capital=equity_now,
                                       verbose=False, start=w.oos_start, end=w.oos_end, funding=funding,
-                                      state=carry, close_at_end=True)
+                                      state=carry, close_at_end=True, intrabar=intrabar)
                 eq, oos_m, oos_t, carry = res.equity, res.metrics, res.trades, None
                 if not oos_t.empty:
                     oos_t = oos_t.assign(window=w.n)
@@ -233,7 +237,7 @@ class ParameterOptimizer:
                 # new parameters (as the live bot would after a parameter update)
                 res = self.engine.run(oos_df, strategy_class({**self.config, **params}), symbol,
                                       capital=equity_now, verbose=False, start=w.oos_start,
-                                      end=w.oos_end, funding=funding, state=carry,
+                                      end=w.oos_end, funding=funding, state=carry, intrabar=intrabar,
                                       close_at_end=is_last)
                 eq, oos_m, oos_t, carry = res.equity, res.metrics, res.trades, res.state
                 if not oos_t.empty:

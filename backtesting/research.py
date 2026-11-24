@@ -51,6 +51,7 @@ class ResearchData:
     btc:              pd.DataFrame            # BTC OHLCV for the benchmark
     holdout_start:    Optional[pd.Timestamp]
     includes_holdout: bool
+    intrabar:         Optional[pd.DataFrame] = None   # lower-timeframe candles for stop replay
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -147,12 +148,15 @@ def load_research_data(config: dict, pair: dict, fetcher, final_holdout: bool = 
                        f"the engine falls back to the constant funding_rate_8h")
         funding = None
     btc = df if data_symbol.split(":")[0] == BTC.split(":")[0] else fetcher.ohlcv_range(BTC, tf, start, end)
+    ib_tf = config["backtest"].get("intrabar_timeframe")
+    intrabar = fetcher.ohlcv_range(data_symbol, ib_tf, start, end) if ib_tf else None
 
     if not final_holdout:
         df, funding, btc = cut_holdout(df, hs), cut_funding(funding, hs), cut_holdout(btc, hs)
+        intrabar = cut_holdout(intrabar, hs)
         if hs is not None:
             logger.info(f"Hold-out from {hs:%Y-%m-%d} is excluded (pass --final-holdout to evaluate it)")
-    return ResearchData(data_symbol, df, funding, btc, hs, final_holdout)
+    return ResearchData(data_symbol, df, funding, btc, hs, final_holdout, intrabar)
 
 
 def _strategy_class(config, name):
@@ -193,7 +197,8 @@ def run_backtest(config: dict, pair: dict, fetcher, final_holdout: bool = False,
 
     label = "FINAL HOLD-OUT" if final_holdout else "RESEARCH PERIOD"
     print(f"\n{'=' * 60}\n  BACKTEST ({label}): {data.symbol} | {strat_name} | fixed config parameters\n{'=' * 60}")
-    res = engine.run(data.df, strategy, data.symbol, verbose=False, start=start, funding=data.funding)
+    res = engine.run(data.df, strategy, data.symbol, verbose=False, start=start, funding=data.funding,
+                     intrabar=data.intrabar)
     _print_trades_summary(res)
     print_report(res.metrics)
     costs = cost_breakdown(res.trades, res.equity, engine.initial_capital, config)
@@ -203,7 +208,8 @@ def run_backtest(config: dict, pair: dict, fetcher, final_holdout: bool = False,
 
     split = None
     if not final_holdout:
-        split = engine.split_consistency_check(data.df, strategy, data.symbol, funding=data.funding)
+        split = engine.split_consistency_check(data.df, strategy, data.symbol, funding=data.funding,
+                                               intrabar=data.intrabar)
 
     kind = "holdout" if final_holdout else "backtest"
     extra = {"holdout_start": data.holdout_start.isoformat()} if final_holdout else {}
@@ -229,12 +235,13 @@ def run_costs(config: dict, pair: dict, fetcher, final_holdout: bool = False, lo
     label = "FINAL HOLD-OUT" if final_holdout else "RESEARCH PERIOD"
 
     engine = BacktestEngine(config)
-    res    = engine.run(data.df, cls(config), data.symbol, verbose=False, start=start, funding=data.funding)
+    res    = engine.run(data.df, cls(config), data.symbol, verbose=False, start=start, funding=data.funding,
+                        intrabar=data.intrabar)
     costs  = cost_breakdown(res.trades, res.equity, engine.initial_capital, config)
     print(f"\n{'=' * 70}\n  COSTS ({label}): {data.symbol} | {strat_name} | configured parameters\n"
           f"  {res.equity.index[0]:%Y-%m-%d} - {res.equity.index[-1]:%Y-%m-%d}\n{'=' * 70}")
     print_breakdown(costs, engine.initial_capital, "GROSS VS NET (configured costs)")
-    table = cost_scenarios(config, data.df, cls, data.symbol, data.funding, start=start)
+    table = cost_scenarios(config, data.df, cls, data.symbol, data.funding, start=start, intrabar=data.intrabar)
     print_scenarios(table)
 
     params = {k: config.get(k) for k in config.get("optimize", {}).get("param_grid", {}).get(strat_name, {})}
@@ -306,6 +313,7 @@ def run_optimize(config: dict, pair: dict, fetcher, final_holdout: bool = False,
         study = new_study_id(f"wfo-{mode}")
         r = optimizer.walk_forward_optimize(
             data.df, cls, s["param_grid"], symbol=data.symbol, funding=data.funding, mode=mode,
+            intrabar=data.intrabar,
             is_months=s["is_months"], oos_months=s["oos_months"], metric=s["metric"],
             min_trades=s["min_trades"], max_dd_limit=s["max_dd_limit"], n_variants=n_var,
             strategy_name=strat_name, study_id=study, extra_settings={"config_fingerprint": fp})
@@ -360,7 +368,9 @@ def evaluate_holdout(config: dict, pair: dict, fetcher, log=None) -> dict:
 
     research_df = cut_holdout(full.df, hs)                 # fitting never sees hold-out rows
     research_f  = cut_funding(full.funding, hs)
-    trials = optimizer.evaluate_grid(research_df, cls, s["param_grid"], is_start, hs, research_f, full.symbol)
+    research_ib = cut_holdout(full.intrabar, hs)
+    trials = optimizer.evaluate_grid(research_df, cls, s["param_grid"], is_start, hs, research_f, full.symbol,
+                                     intrabar=research_ib)
     valid  = optimizer.filter_valid(trials, s["min_trades"], s["max_dd_limit"])
     if valid.empty:
         raise RuntimeError("No valid parameter set in the final IS window - nothing to evaluate")
@@ -373,7 +383,8 @@ def evaluate_holdout(config: dict, pair: dict, fetcher, log=None) -> dict:
           f"{'  (REPEATED EVALUATION #' + str(prior + 1) + ')' if prior else ''}\n{'=' * 60}")
 
     strategy = cls({**config, **params})
-    res = engine.run(full.df, strategy, full.symbol, verbose=False, start=hs, funding=full.funding)
+    res = engine.run(full.df, strategy, full.symbol, verbose=False, start=hs, funding=full.funding,
+                     intrabar=full.intrabar)
     _print_trades_summary(res)
     print_report(res.metrics)
     table = _benchmarks(config, engine, full, res.equity, engine.initial_capital, "BENCHMARKS - final hold-out")

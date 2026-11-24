@@ -73,7 +73,7 @@ SCENARIOS = [
 ]
 
 
-def cost_scenarios(config, df, strategy_factory, symbol, funding, start=None) -> pd.DataFrame:
+def cost_scenarios(config, df, strategy_factory, symbol, funding, start=None, intrabar=None) -> pd.DataFrame:
     rows = []
     for label, cm, sm, use_f in SCENARIOS:
         c = copy.deepcopy(config)
@@ -82,7 +82,7 @@ def cost_scenarios(config, df, strategy_factory, symbol, funding, start=None) ->
         if not use_f:
             c["backtest"]["funding_rate_8h"] = 0.0
         r = BacktestEngine(c).run(df, strategy_factory(c), symbol, verbose=False, start=start,
-                                  funding=funding if use_f else None)
+                                  funding=funding if use_f else None, intrabar=intrabar)
         m = r.metrics
         rows.append({"scenario": label, "total_return": m.get("total_return", 0.0),
                      "sharpe": m.get("sharpe", 0.0), "profit_factor": m.get("profit_factor", 0.0),

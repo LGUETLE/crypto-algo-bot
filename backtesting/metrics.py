@@ -129,12 +129,22 @@ def _years(index: pd.Index, ppy: float) -> float:
     return span / YEAR_SECONDS
 
 
+def _annualise(growth: float, years: float) -> float:
+    """growth ** (1 / years) - 1 without overflow warnings on very short periods."""
+    if growth <= 0:
+        return -1.0
+    try:
+        return growth ** (1 / max(years, 1e-9)) - 1
+    except OverflowError:
+        return float("inf")
+
+
 def _return_metrics(equity: pd.Series, capital: float, ppy: float) -> dict:
     if len(equity) == 0:
         return {"total_return": 0, "cagr": 0, "best_day": 0, "worst_day": 0, "final_equity": capital}
     total_return = (equity.iloc[-1] - capital) / capital
     n_years      = _years(equity.index, ppy)
-    cagr         = (equity.iloc[-1] / capital) ** (1 / max(n_years, 1e-9)) - 1 if equity.iloc[-1] > 0 else -1.0
+    cagr         = _annualise(float(equity.iloc[-1]) / capital, n_years)
     returns      = period_returns(equity, capital)
 
     return {
