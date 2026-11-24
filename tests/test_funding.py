@@ -82,7 +82,7 @@ def test_constant_fallback_warns_and_uses_8h_events(caplog):
 def test_trade_pnl_is_net_of_both_fees_and_funding():
     """Sum of trade PnL must reconcile exactly with the equity change."""
     df = ohlcv(300)
-    res = _run(df, {3: 1, 50: -1, 120: 1}, exits=[200], funding=_events(df, 0.0005))
+    res = _run(df, {3: 1, 50: -1, 51: -1, 120: 1, 121: 1}, exits=[200], funding=_events(df, 0.0005))
     assert len(res.trades) == 3
     assert res.trades["pnl_usdt"].sum() == pytest.approx(res.equity.iloc[-1] - 10_000, abs=1e-6)
     t = res.trades.iloc[0]

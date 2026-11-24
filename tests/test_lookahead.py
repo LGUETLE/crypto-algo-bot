@@ -91,13 +91,23 @@ def test_signal_exit_fills_at_next_bar_open():
     assert t["exit_price"] == pytest.approx(df["open"].iloc[21] * (1 - SLIP))
 
 
-def test_reversal_closes_and_reopens_at_next_open():
+def test_opposite_signal_only_closes_like_live():
+    """Live run_cycle: an opposite signal closes the position; it does NOT open the reverse
+    position in the same cycle (if pos: close / elif signal: open). The backtest must match."""
     df = ohlcv(50)
     strat = ScriptedStrategy(CONFIG, entries={10: 1, 20: -1})
     trades = BacktestEngine(CONFIG).run(df, strat, verbose=False).trades
+    assert len(trades) == 1
+    assert trades["exit_time"].iloc[0] == df.index[21] and trades["exit_reason"].iloc[0] == "Signal"
+
+
+def test_new_entry_needs_a_signal_after_the_exit():
+    df = ohlcv(50)
+    strat = ScriptedStrategy(CONFIG, entries={10: 1, 20: -1, 21: -1})
+    trades = BacktestEngine(CONFIG).run(df, strat, verbose=False).trades
     assert list(trades["side"][:2]) == ["long", "short"]
     assert trades["exit_time"].iloc[0] == df.index[21]
-    assert trades["entry_time"].iloc[1] == df.index[21]
+    assert trades["entry_time"].iloc[1] == df.index[22]
 
 
 def test_signal_on_last_bar_is_not_traded():
@@ -216,3 +226,14 @@ def test_run_window_trades_only_inside_window():
     assert t["exit_time"] == df.index[179] and t["exit_reason"] == "End"
     # position closed at the window end -> final equity is realised cash
     assert res.equity.iloc[-1] == pytest.approx(10_000 + t["pnl_usdt"], rel=1e-9)
+
+
+def test_ambiguous_trailing_bars_are_counted():
+    cfg = {**CONFIG, "risk": {**CONFIG["risk"], "trailing_activation": 0.01, "trailing_callback": 0.005}}
+    idx = pd.date_range("2024-01-01", periods=10, freq="1h", tz="UTC")
+    px = np.full(10, 100.0)
+    df = pd.DataFrame({"open": px, "high": px, "low": px, "close": px, "volume": 1.0}, index=idx)
+    # bar 3: +3 % high and a low below high*(1-0.5 %) -> trailing armed AND inside the range
+    df.iloc[3, df.columns.get_indexer(["high", "low", "close"])] = [103.0, 100.0, 102.0]
+    res = BacktestEngine(cfg).run(df, ScriptedStrategy(cfg, entries={1: 1}), verbose=False)
+    assert res.metrics["ambiguous_trailing_bars"] == 1

@@ -98,8 +98,10 @@ class BacktestEngine:
             start=None, end=None, funding: Optional[pd.Series] = None) -> BacktestResult:
         """
         Event order per bar t (timestamps are candle OPEN times):
-          1. orders decided on the close of bar t-1 are filled at the OPEN of bar t
-             (signal exit / reversal first, then a new entry)
+          1. orders decided on the close of bar t-1 are filled at the OPEN of bar t:
+             either a signal exit (exit flag or opposite signal) OR, when flat, an entry.
+             Like the live bot (main.run_cycle), an opposite signal only closes the position;
+             a new entry needs a signal on a later bar.
           2. stop loss / take profit are checked against bar t's range (incl. the entry bar)
           3. the trailing stop is ratcheted with bar t's high/low (risk.stops, same as live)
           4. equity is marked at the close of bar t
@@ -144,6 +146,7 @@ class BacktestEngine:
 
         cash, position = float(capital), None
         equity_vals, closed_trades = [], []
+        ambiguous = 0          # bars where the ratcheted trailing stop also lies inside the bar range
 
         for i in range(first, last + 1):
             ts = idx[i]
@@ -159,6 +162,7 @@ class BacktestEngine:
                 position.funding += pay
 
             # ── 1. Fills at the open ──────────────────────────────────────
+            exited = False
             if position is not None:
                 is_long  = position.side == "long"
                 opposite = p_sig == (-1 if is_long else 1)
@@ -166,9 +170,9 @@ class BacktestEngine:
                     position = self._close(position, ts, o[i], "Signal")
                     cash += self._released(position)
                     closed_trades.append(position)
-                    position = None
+                    position, exited = None, True
 
-            if position is None and p_sig in (1, -1) and cash > 100:
+            if position is None and not exited and p_sig in (1, -1) and cash > 100:
                 side = "long" if p_sig == 1 else "short"
                 ep   = o[i] * (1 + self.slippage if side == "long" else 1 - self.slippage)
                 sz   = self.sizer.calculate(cash, ep, side, None if np.isnan(p_atr) else p_atr)
@@ -194,6 +198,13 @@ class BacktestEngine:
                     position.sl_price, position.trail_active = update_trailing(
                         position.side, position.entry_price, position.sl_price,
                         position.trail_active, h[i], l[i], self.trail_act, self.trail_cb)
+                    # OHLC ambiguity: if the high came before the low, an exchange-side trailing
+                    # stop would already have fired inside this bar. Like the paper broker, the
+                    # engine only checks the new level from the next bar on; count how often
+                    # this matters (reported as metrics["ambiguous_trailing_bars"]).
+                    if position.trail_active and ((l[i] <= position.sl_price) if position.side == "long"
+                                                  else (h[i] >= position.sl_price)):
+                        ambiguous += 1
 
             # ── 4. Equity at the close ────────────────────────────────────
             unreal, locked = 0.0, 0.0
@@ -219,6 +230,7 @@ class BacktestEngine:
         trades  = self._to_df(closed_trades)
         metrics = calc_all(equity, trades, capital, periods_per_year=self.periods_per_year(idx),
                            risk_free_rate=self.risk_free_rate)
+        metrics["ambiguous_trailing_bars"] = ambiguous
 
         if verbose:
             if not trades.empty:
