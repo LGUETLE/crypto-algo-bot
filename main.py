@@ -54,6 +54,15 @@ def latest_atr(df: pd.DataFrame, length: int = 14):
     return float(atr.iloc[-1])
 
 
+def signal_atr(strategy, df: pd.DataFrame):
+    """ATR used for stop sizing, identical to the backtest (BacktestEngine.prepare): the
+    strategy's own atr_14 column (computed with its configured atr_period), else ATR(14)."""
+    out = strategy.add_indicators(df.copy())
+    if "atr_14" in out.columns and len(out) and not pd.isna(out["atr_14"].iloc[-1]):
+        return float(out["atr_14"].iloc[-1])
+    return latest_atr(df)
+
+
 # ── Trading cycle ─────────────────────────────────────────────────────────────
 
 def run_cycle(broker, strategies, guard, sizer, pairs, config):
@@ -121,12 +130,14 @@ def run_cycle(broker, strategies, guard, sizer, pairs, config):
                     continue
 
                 side   = "buy" if signal == 1 else "sell"
-                sizing = sizer.calculate(capital, price, side, latest_atr(df),
+                sizing = sizer.calculate(capital, price, side, signal_atr(strategy, df),
                                          risk_pct=min(sizer.risk_pct, budget))
+                # the stop is set from the actual fill price (sl_dist), like the backtest
                 order  = broker.place_order(
                     symbol=symbol, side=side, amount=sizing["size"],
                     sl_price=sizing["sl_price"], tp_price=sizing["tp_price"],
-                    entry_price=price, strategy=strat_name, margin=sizing["margin"])
+                    entry_price=price, strategy=strat_name, margin=sizing["margin"],
+                    sl_dist=sizing["sl_dist"])
                 if order:
                     notify_entry(symbol, side, price, sizing["size"],
                                  sizing["sl_price"], sizing["tp_price"], broker.mode)

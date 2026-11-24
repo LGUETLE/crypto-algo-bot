@@ -40,12 +40,14 @@ def test_short_is_stored_and_stopped_out(broker):
 
 def test_trailing_stop_ratchets_up_for_long(broker):
     broker.place_order(SYMBOL, "buy", 1.0, sl_price=95.0, entry_price=100.0, strategy="t", margin=33)
-    assert broker.manage_stops(SYMBOL, _candle(high=103.0, low=100.0)) is None
+    # low stays above the ratcheted level 103 * 0.992 = 102.18; a lower low in the same bar would
+    # now be an intrabar trailing exit (adverse high/low order, see tests/test_parity.py)
+    assert broker.manage_stops(SYMBOL, _candle(high=103.0, low=102.5)) is None
     pos = broker.om.get_position(SYMBOL)
     assert pos["trail_active"] == 1
     assert pos["sl_price"] == pytest.approx(103.0 * 0.992)
 
-    broker.manage_stops(SYMBOL, _candle(high=102.9, low=102.5))    # lower high must not loosen the stop
+    broker.manage_stops(SYMBOL, _candle(high=102.9, low=102.6))    # lower high must not loosen the stop
     assert broker.om.get_position(SYMBOL)["sl_price"] == pytest.approx(103.0 * 0.992)
 
 

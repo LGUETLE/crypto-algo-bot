@@ -10,7 +10,10 @@ Modes (TRADING_MODE env var / --mode flag):
   live   real money
 
 Order path (demo/live):
-  - entry with an exchange-side stop loss attached (and optional take profit)
+  - entry with an exchange-side stop loss attached (and optional take profit), computed from the
+    last close; after the fill the stop is moved to fill price -/+ stop distance (as in the
+    backtest): a reduce-only stop at the fill-based level is placed FIRST, then the estimate-based
+    one is cancelled. If either step fails the original stop stays (never unprotected).
   - exchange-side trailing stop order (best effort, the hard SL stays active if it fails)
   - reduce-only market exits, trigger orders cleaned up afterwards
   - sizes are tracked in COINS internally and converted to contracts for the exchange
@@ -25,7 +28,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from execution.order_manager import OrderManager
-from risk.stops import update_trailing
+from risk.stops import bar_stop_check, update_trailing
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -106,22 +109,28 @@ class Broker:
     # ── Entry ─────────────────────────────────────────────────────────────
 
     def place_order(self, symbol, side, amount, sl_price=None, tp_price=None,
-                    entry_price=None, strategy="", margin=0.0) -> Optional[dict]:
+                    entry_price=None, strategy="", margin=0.0, sl_dist=None) -> Optional[dict]:
         """
         Market entry with exchange-side SL (and optional TP). side: 'buy' (long) or 'sell' (short).
         amount is in COINS. Returns the order, or None if nothing was placed.
+        sl_dist: stop distance in price units. If given, the stop is set from the ACTUAL fill price
+        (fill -/+ sl_dist), like the backtest; sl_price is then only the pre-fill estimate.
         """
         is_long = side == "buy"
+        if sl_price is None and sl_dist and entry_price:
+            sl_price = entry_price - sl_dist if is_long else entry_price + sl_dist
 
         if self.mode == "paper":
             price = (entry_price or 0.0) * (1 + self.slippage if is_long else 1 - self.slippage)
+            if sl_dist:
+                sl_price = price - sl_dist if is_long else price + sl_dist
             order = {"id": "paper", "status": "filled", "amount": amount, "price": price}
             logger.info(f"[PAPER] {side.upper()} {amount:.4f} {symbol} @ {price:.4f} SL={sl_price} TP={tp_price}")
         else:
-            result = self._live_entry(symbol, side, amount, sl_price, tp_price, entry_price)
+            result = self._live_entry(symbol, side, amount, sl_price, tp_price, entry_price, sl_dist)
             if result is None:
                 return None
-            order, price, amount = result
+            order, price, amount, sl_price = result
 
         if sl_price:    # long AND short positions are persisted
             self.om.open_position(
@@ -132,7 +141,7 @@ class Broker:
             )
         return order
 
-    def _live_entry(self, symbol, side, coins, sl_price, tp_price, entry_price):
+    def _live_entry(self, symbol, side, coins, sl_price, tp_price, entry_price, sl_dist=None):
         ex = self.exchange
         if not ex.markets:
             ex.load_markets()
@@ -159,10 +168,47 @@ class Broker:
         order = ex.create_market_order(symbol, side, contracts, params=params)
         price = float(order.get("average") or entry_price or 0)
         logger.info(f"[{self.mode.upper()}] {side.upper()} {contracts} contracts {symbol} -> {order['id']} "
-                    f"| exchange SL: {sl_price}")
+                    f"| exchange SL (estimate): {sl_price}")
+
+        if sl_dist and sl_price and price:
+            target = price - sl_dist if side == "buy" else price + sl_dist
+            sl_price = self._move_stop(symbol, side, contracts, sl_price, target)
 
         self._place_trailing(symbol, side, contracts, price)
-        return order, price, contracts * contract_size
+        return order, price, contracts * contract_size, sl_price
+
+    def _move_stop(self, symbol, side, contracts, old_sl, new_sl) -> float:
+        """
+        Moves the attached (estimate-based) stop to the fill-based level. Places the new
+        reduce-only stop FIRST, then cancels the old one, so the position is never unprotected.
+        Returns the stop that is in force afterwards. Verify against the demo account first.
+        """
+        ex = self.exchange
+        old_px = float(ex.price_to_precision(symbol, old_sl))
+        new_px = float(ex.price_to_precision(symbol, new_sl))
+        if new_px == old_px:
+            return old_sl
+        close_side = "sell" if side == "buy" else "buy"
+        try:
+            ex.create_order(symbol, "market", close_side, contracts,
+                            params={"stopLossPrice": new_px, "reduceOnly": True, **self._order_params()})
+        except Exception as e:
+            logger.warning(f"{symbol}: could not place the fill-based stop at {new_px} ({e}); "
+                           f"keeping the estimate-based stop at {old_px}")
+            return old_sl
+        try:
+            stale = [o for o in ex.fetch_open_orders(symbol, params={"stop": True})
+                     if o.get("triggerPrice") is not None and abs(float(o["triggerPrice"]) - old_px) < 1e-12]
+            for o in stale:
+                ex.cancel_order(o["id"], symbol, params={"stop": True})
+            if not stale:
+                logger.warning(f"{symbol}: estimate-based stop at {old_px} not found; it may still be "
+                               f"active next to the fill-based stop at {new_px}")
+        except Exception as e:
+            logger.warning(f"{symbol}: could not cancel the estimate-based stop at {old_px} ({e}); "
+                           f"both stops are active, the tighter one triggers first")
+        logger.info(f"{symbol}: stop moved to fill-based level {new_px} (estimate was {old_px})")
+        return new_sl
 
     def _place_trailing(self, symbol, side, contracts, entry_price):
         """Exchange-side trailing stop (reduce-only). Verify these params in the demo account first."""
@@ -233,11 +279,17 @@ class Broker:
         is_long = pos["side"] == "buy"
 
         if self.mode == "paper":
-            hit = last["low"] <= pos["sl_price"] if is_long else last["high"] >= pos["sl_price"]
-            if hit:
-                px = pos["sl_price"] * (1 - self.slippage if is_long else 1 + self.slippage)
-                return self.om.close_position(symbol, px,
-                                              "TrailingSL" if pos["trail_active"] else "SL", self.mode)
+            # same intrabar simulation as the backtest (adverse order, gap fills at the open)
+            raw, reason, sl, active = bar_stop_check(
+                "long" if is_long else "short", pos["entry_price"], pos["sl_price"],
+                bool(pos["trail_active"]), last["open"], last["high"], last["low"],
+                self.trail_act, self.trail_cb, pos.get("tp_price"))
+            if raw is not None:
+                px = raw * (1 - self.slippage if is_long else 1 + self.slippage)
+                return self.om.close_position(symbol, px, reason, self.mode)
+            if sl != pos["sl_price"] or active != bool(pos["trail_active"]):
+                self.om.update_stop(symbol, sl, active)
+            return None
 
         sl, active = update_trailing("long" if is_long else "short", pos["entry_price"],
                                      pos["sl_price"], bool(pos["trail_active"]),

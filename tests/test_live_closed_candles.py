@@ -93,3 +93,5 @@ def test_breakout_in_last_closed_candle_is_traded(main_module):
     forming.index = forming.index + pd.Timedelta("1h")
     orders = _run(main_module, pd.concat([df, forming]))
     assert len(orders) == 1 and orders[0]["side"] == "buy"
+    # stop distance is handed over so the stop is set from the actual fill price
+    assert orders[0]["sl_dist"] > 0
