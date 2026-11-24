@@ -42,8 +42,41 @@ futures:
 
 # ── Backtest ──────────────────────────────────
 backtest:
+  # Fixed data window (reproducible, end exclusive). Without start_date: the last lookback_days.
+  start_date:       "2021-01-01"
+  end_date:         "2026-11-01"
+  # Final hold-out [holdout_start, end_date): backtest/optimize never read it unless
+  # --final-holdout is passed. Evaluate it ONCE; every evaluation is logged.
+  holdout_start:    "2025-11-01"
   lookback_days:    1095
-  walk_forward_pct: 0.3
-  commission:       0.0006     # taker fee per side - set it to YOUR venue's fee tier
-  slippage:         0.0002
-  funding_rate_8h:  0.0001     # assumed constant; longs pay, shorts receive
+  walk_forward_pct: 0.3        # split_consistency_check(): share of each block labelled "OOS"
+  commission:       0.0005     # taker fee per side: OKX Europe X-Perps standard tier (0.02 % maker / 0.05 % taker)
+  slippage:         0.0002     # per side
+  funding_rate_8h:  0.0001     # FALLBACK only, if historical funding cannot be loaded (warns)
+  risk_free_rate:   0.0        # annual, used in Sharpe/Sortino (0 = crypto convention)
+  intrabar_timeframe: "1m"     # replay stop/trailing/TP over 1m candles when the high/low order
+                               # of a bar matters (null = adverse-order rule on the full bar)
+  research_log:     logs/research_log.jsonl
+
+# ── Optimisation (walk-forward) ───────────────
+# Pre-registered before any run on real data; changing it creates a new "variant" that counts
+# as an extra trial in the Deflated Sharpe Ratio.
+optimize:
+  metric:       sharpe         # selection metric on the in-sample window
+  min_trades:   10             # per in-sample window (12 months)
+  max_dd_limit: -0.50          # drop combos with a worse in-sample drawdown
+  is_months:    12
+  oos_months:   3              # also the step between windows
+  modes:        [rolling, anchored]   # first = primary, used for the final hold-out fit
+  param_grid:
+    donchian_breakout:
+      dc_enter:      [20, 30, 40, 50]
+      dc_exit:       [5, 10, 15]
+      adx_threshold: [20, 25, 30]
+      atr_min_mult:  [0.3, 0.5, 0.7]
+    rsi_mean_reversion:
+      rsi_oversold:   [25, 30, 35]
+      rsi_overbought: [65, 70, 75]
+      rsi_exit_long:  [50, 55, 60]
+      rsi_exit_short: [40, 45, 50]
+      adx_max:        [25, 30, 35]

@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
+from backtesting.metrics import periods_per_year
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +41,7 @@ class FeatureEngineer:
                      self._volume, self._structure, self._time):
             df = step(df)
         core = [c for c in ("rsi_14", "atr_14", "vol_ratio") if c in df.columns]
-        df.dropna(subset=core, inplace=True)
+        df = df.dropna(subset=core)
         logger.info(f"Features computed: {len(df.columns)} columns, {len(df)} rows")
         return df
 
@@ -102,8 +104,9 @@ class FeatureEngineer:
             df["squeeze"] = ((df["bb_upper"] < df["kc_upper"]) &
                              (df["bb_lower"] > df["kc_lower"])).astype(int)
 
-        # Annualised with sqrt(365*24) -> assumes 1h candles
-        df["hist_vol"] = df["close"].pct_change().rolling(20).std() * np.sqrt(365 * 24)
+        # Annualised for the configured bar timeframe (1h -> sqrt(8760))
+        ppy = periods_per_year(self.config.get("timeframe", "1h"))
+        df["hist_vol"] = df["close"].pct_change().rolling(20).std() * np.sqrt(ppy)
         return df
 
     # ── Volume ────────────────────────────────────────────────────────────
@@ -141,7 +144,7 @@ class FeatureEngineer:
 
     def _time(self, df):
         df["hour"]        = df.index.hour
-        df["day_of_week"] = df.index.dayofweek    # 0 = Monday
+        df["day_of_week"] = df.index.day_of_week    # 0 = Monday
         df["is_weekend"]  = (df["day_of_week"] >= 5).astype(int)
 
         # Sessions in UTC: London 8-16, New York 13-21

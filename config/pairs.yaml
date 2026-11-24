@@ -4,8 +4,9 @@ pairs:
   # data_symbol: Binance symbol used as price-history proxy for backtests
   #
   # ETH: Donchian breakout.
-  # NOTE: earlier "validated" results (OOS Sharpe 1.37, OOS return +107.9 %) came from an
-  # engine that multiplied PnL by leverage - re-validate before trusting any number.
+  # Earlier "validated" results (OOS Sharpe 1.37, OOS return +107.9 %) came from an engine
+  # with look-ahead fills and leveraged PnL and are void. Current evaluation (walk-forward +
+  # final hold-out): no edge after costs - see RESEARCH.md.
   - symbol: "ETH/USDT:USDT"        # TODO on OKX Europe: replace with the ETH X-Perp symbol
     data_symbol: "ETH/USDT:USDT"
     active: true

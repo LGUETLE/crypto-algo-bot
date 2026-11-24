@@ -13,5 +13,5 @@ jobs:
         with:
           python-version: "3.12"      # pandas-ta 0.4.x requires Python >= 3.12
           cache: pip
-      - run: pip install -r requirements.txt
-      - run: pytest tests/ -v
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -m "not slow" -v

@@ -2,6 +2,8 @@
 import numpy as np
 import pandas as pd
 
+from features.timeframes import to_timedelta
+
 
 def add_macro_trend(df: pd.DataFrame, macro: pd.DataFrame, macro_tf: str) -> pd.DataFrame:
     """
@@ -11,7 +13,7 @@ def add_macro_trend(df: pd.DataFrame, macro: pd.DataFrame, macro_tf: str) -> pd.
     so a 1h bar never sees the still-forming daily candle.
     Both frames need a UTC DatetimeIndex (open time of each candle).
     """
-    duration  = pd.Timedelta(macro_tf)          # "4h", "1d", "1w" are all valid
+    duration  = to_timedelta(macro_tf)          # "4h", "1d", "1w"
     available = pd.Series(macro["close"].values, index=macro.index + duration)
     available = available[~available.index.duplicated(keep="last")].sort_index()
 
