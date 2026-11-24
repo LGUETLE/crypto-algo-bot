@@ -1,0 +1,29 @@
+{
+ "name": "tsmom-v1",
+ "variant": "V1",
+ "start": "2026-11-25",
+ "last_closed_day": "2026-11-23",
+ "orders_for_open_of": "2026-11-24",
+ "target_weights": {},
+ "members": [
+  "BTC",
+  "ENA",
+  "ETH",
+  "HYPE",
+  "LINK",
+  "NEAR",
+  "ONDO",
+  "PUMP",
+  "SOL",
+  "SUI",
+  "XRP",
+  "ZEC"
+ ],
+ "generated": "2026-11-24T03:03:22+00:00",
+ "status": "not started",
+ "coverage": {
+  "listed_now": 168,
+  "missing_now": [],
+  "updated": 168
+ }
+}
