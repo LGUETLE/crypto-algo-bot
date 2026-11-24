@@ -169,4 +169,48 @@ Anything else is reported as no demonstrated edge.
 
 ## 12. Amendments (append-only)
 
-(none)
+### Amendment 1 (2026-11-24): funding settlement interval
+
+- **Reason:** section 2 states that OKX Europe X-Perps settle funding hourly. Measured from the
+  public funding-history endpoint (`scripts/compare_funding.py`, RESEARCH.md Appendix A), they
+  settle **every 8 hours** (00/08/16 UTC).
+- **Impact:** none on any reported number, because the study uses Binance funding.
+
+### Amendment 2 (2026-11-24): forward paper trading of `tsmom-v1`
+
+Written after the study and its single hold-out evaluation. It adds an independent forward test;
+nothing above is changed.
+
+**Frozen configuration `tsmom-v1`:**
+
+| Item | Value |
+|---|---|
+| Variant | **V1: sign signal, long_flat.** This is the variant the preregistered W1 procedure selected on [2024-11-01, 2025-11-01), the last IS window before the hold-out. Static: no re-selection |
+| Parameters | `config/tsmom.yaml` unchanged: lookbacks 7/14/28/56, vol and covariance windows 60, vol target 30 %, cap 0.25, gross cap 2.0, band 0.05, 12 members (stay <= 15), 30-day volume ranking, >= 90 days of history |
+| Universe | candidates = the 168 crypto X-Perps in `config/okx_xperps_snapshot.json` (OKX Europe, retrieved 2026-11-24). Coins listed later are not added. A coin that stops trading is closed at its last close |
+| Data | OKX Europe X-Perps public endpoints only: daily candles (`bar=1Dutc`), volume = coins x close, realised 8-hourly funding. This differs from the study's Binance proxy; the rules are identical |
+| Costs | commission 0.05 % per side; slippage 0.02 % (BTC, ETH) / 0.05 % (others) per side; funding as charged by the X-Perp |
+| Capital | 10,000 USDT (paper) |
+| Start | weights decided on the close of 2026-11-24 are traded at the **open of 2026-11-25** (00:00 UTC). This is the first day of the track record |
+| Execution | GitHub Actions, daily after 00:00 UTC (`.github/workflows/paper-tsmom.yml`). Data, state and the daily log are stored on branch `paper-state`. Each run replays the frozen engine from the start date over the stored data |
+
+**Evaluation rule:**
+
+- **Quarterly** (after 2027-02-25, 2027-05-25, 2027-08-25, 2027-11-25), report:
+  - return,
+  - annualised Sharpe with its standard error SE = sqrt((1 + SR_d² / 2) / T) x sqrt(365) and the
+    95 % interval,
+  - maximum drawdown,
+  - turnover, fees, slippage and funding,
+  - benchmarks over identical days: BTC buy & hold (OKX BTC X-Perp), equal-weight universe and
+    vol-matched BTC, each with excess return and information ratio.
+- **Formal verdict after 12 months** (on the data up to the close of 2027-11-24):
+  - **"not supported":** the upper bound of the 95 % Sharpe interval is below 0.66, the
+    less-biased Binance-wide estimate from the study.
+  - **"edge confirmed":** Sharpe / SE >= 1.645. With one year of data this requires a Sharpe of
+    about 1.64 or more; RESEARCH.md P2.5 explains why a moderate edge cannot be confirmed in 12 months.
+  - **"inconclusive, consistent with the study":** every other outcome.
+  - The drawdown-overlay claim is assessed separately: strategy max drawdown vs BTC buy & hold max
+    drawdown over the same days.
+- **No changes:** no parameter, universe, data or cost change during the 12 months. Any change
+  creates `tsmom-v2` with a new start date and its own 12-month clock.

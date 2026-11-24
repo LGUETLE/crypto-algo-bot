@@ -1,0 +1,11 @@
+# Frozen forward paper-trading configuration (docs/preregistration.md, Amendment 2). Do not edit:
+# any change is tsmom-v2 with a new start date. Strategy parameters come from config/tsmom.yaml.
+name:          tsmom-v1
+variant:       V1                 # sign / long_flat
+start:         "2026-11-25"       # first open traded (weights decided on the close of 2026-11-24)
+universe_snapshot: config/okx_xperps_snapshot.json
+data_source:   okx_eea_public     # eea.okx.com X-Perps: 1Dutc candles, 8h funding
+history_days:  200                # candle history loaded before the start for signals and ranking
+majors:        [BTC, ETH]         # slippage tier (columns are coin names here)
+benchmark:     BTC
+verdict_date:  "2027-11-25"
