@@ -26,7 +26,7 @@ import pandas_ta as ta
 from backtesting.metrics import calc_all, infer_periods_per_year, periods_per_year, print_report
 from features.timeframes import to_timedelta
 from risk.position_sizer import PositionSizer
-from risk.stops import update_trailing
+from risk.stops import bar_stop_check
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +102,10 @@ class BacktestEngine:
              either a signal exit (exit flag or opposite signal) OR, when flat, an entry.
              Like the live bot (main.run_cycle), an opposite signal only closes the position;
              a new entry needs a signal on a later bar.
-          2. stop loss / take profit are checked against bar t's range (incl. the entry bar)
-          3. the trailing stop is ratcheted with bar t's high/low (risk.stops, same as live)
+          2./3. stop loss, trailing stop and take profit are simulated intrabar against bar t's
+             range (incl. the entry bar) with risk.stops.bar_stop_check, shared with the paper
+             broker: adverse high/low order, gaps fill at the open, a trailing stop armed and
+             hit inside the same bar exits at its level
           4. equity is marked at the close of bar t
           5. the signal on the close of bar t becomes the pending order for bar t+1
         A signal on the last bar is never filled (there is no next open).
@@ -146,7 +148,6 @@ class BacktestEngine:
 
         cash, position = float(capital), None
         equity_vals, closed_trades = [], []
-        ambiguous = 0          # bars where the ratcheted trailing stop also lies inside the bar range
 
         for i in range(first, last + 1):
             ts = idx[i]
@@ -188,23 +189,14 @@ class BacktestEngine:
 
             # ── 2./3. Intrabar stop / take profit, then trailing ──────────
             if position is not None:
-                raw_exit, reason = self._check_exit(position, o[i], h[i], l[i])
+                raw_exit, reason, position.sl_price, position.trail_active = bar_stop_check(
+                    position.side, position.entry_price, position.sl_price, position.trail_active,
+                    o[i], h[i], l[i], self.trail_act, self.trail_cb, position.tp_price)
                 if raw_exit is not None:
                     position = self._close(position, ts, raw_exit, reason)
                     cash += self._released(position)
                     closed_trades.append(position)
                     position = None
-                else:
-                    position.sl_price, position.trail_active = update_trailing(
-                        position.side, position.entry_price, position.sl_price,
-                        position.trail_active, h[i], l[i], self.trail_act, self.trail_cb)
-                    # OHLC ambiguity: if the high came before the low, an exchange-side trailing
-                    # stop would already have fired inside this bar. Like the paper broker, the
-                    # engine only checks the new level from the next bar on; count how often
-                    # this matters (reported as metrics["ambiguous_trailing_bars"]).
-                    if position.trail_active and ((l[i] <= position.sl_price) if position.side == "long"
-                                                  else (h[i] >= position.sl_price)):
-                        ambiguous += 1
 
             # ── 4. Equity at the close ────────────────────────────────────
             unreal, locked = 0.0, 0.0
@@ -230,7 +222,6 @@ class BacktestEngine:
         trades  = self._to_df(closed_trades)
         metrics = calc_all(equity, trades, capital, periods_per_year=self.periods_per_year(idx),
                            risk_free_rate=self.risk_free_rate)
-        metrics["ambiguous_trailing_bars"] = ambiguous
 
         if verbose:
             if not trades.empty:
@@ -243,22 +234,6 @@ class BacktestEngine:
         return BacktestResult(equity=equity, trades=trades, metrics=metrics, config=self.config)
 
     # ── Exit logic ────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _check_exit(pos: Trade, open_, high, low):
-        """Intrabar exits. Returns (raw_exit_price, reason) or (None, ""). Stop first (conservative)."""
-        is_long = pos.side == "long"
-
-        if (low <= pos.sl_price) if is_long else (high >= pos.sl_price):
-            # On a gap through the stop we are filled at the open, not at the stop
-            raw = min(open_, pos.sl_price) if is_long else max(open_, pos.sl_price)
-            return raw, ("TrailingSL" if pos.trail_active else "SL")
-
-        if pos.tp_price is not None and \
-           ((high >= pos.tp_price) if is_long else (low <= pos.tp_price)):
-            return pos.tp_price, "TP"
-
-        return None, ""
 
     def _close(self, pos: Trade, ts, raw_price, reason) -> Trade:
         """Sets exit price/fee and the NET trade PnL (price PnL - entry fee - exit fee + funding)."""

@@ -228,7 +228,7 @@ def test_run_window_trades_only_inside_window():
     assert res.equity.iloc[-1] == pytest.approx(10_000 + t["pnl_usdt"], rel=1e-9)
 
 
-def test_ambiguous_trailing_bars_are_counted():
+def test_trailing_armed_and_hit_in_one_bar_exits_intrabar():
     cfg = {**CONFIG, "risk": {**CONFIG["risk"], "trailing_activation": 0.01, "trailing_callback": 0.005}}
     idx = pd.date_range("2024-01-01", periods=10, freq="1h", tz="UTC")
     px = np.full(10, 100.0)
@@ -236,4 +236,6 @@ def test_ambiguous_trailing_bars_are_counted():
     # bar 3: +3 % high and a low below high*(1-0.5 %) -> trailing armed AND inside the range
     df.iloc[3, df.columns.get_indexer(["high", "low", "close"])] = [103.0, 100.0, 102.0]
     res = BacktestEngine(cfg).run(df, ScriptedStrategy(cfg, entries={1: 1}), verbose=False)
-    assert res.metrics["ambiguous_trailing_bars"] == 1
+    # formerly only counted as "ambiguous"; now modelled with the adverse order (exit at the trail)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "TrailingSL" and t["exit_time"] == idx[3]
