@@ -67,7 +67,10 @@ class Panel:
 
     def cut(self, end) -> "Panel":
         """Rows strictly before `end` (hold-out guard / truncation)."""
-        m = self.close.index < pd.Timestamp(end)
+        end = pd.Timestamp(end)
+        if end.tzinfo is None and self.close.index.tz is not None:
+            end = end.tz_localize("UTC")
+        m = self.close.index < end
         return Panel(self.open[m], self.close[m], self.volume[m], self.funding[m], self.base)
 
 

@@ -195,3 +195,8 @@ def test_equal_weight_benchmark_holds_between_rebalances():
     assert rebal.sum() < len(W) / 3                       # mostly holding
     res = simulate(pan, W, {**P, "commission": 0.0, "band": 0.0})
     assert not res.trades.empty and len(res.trades["day"].unique()) <= rebal.sum() + 5
+
+
+def test_cut_accepts_naive_and_aware_dates():
+    pan = _panel(n=50, k=3)
+    assert len(pan.cut("2021-01-20").close) == len(pan.cut(pd.Timestamp("2021-01-20", tz="UTC")).close) == 19
