@@ -40,8 +40,7 @@ class RSIMeanReversionStrategy(BaseStrategy):
         df["ema_200"] = ta.ema(df["close"], length=200)
 
         core = ["rsi", "adx", "atr_14"]
-        df.dropna(subset=[x for x in core if x in df.columns], inplace=True)
-        return df
+        return df.dropna(subset=[x for x in core if x in df.columns])
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         c = self.config

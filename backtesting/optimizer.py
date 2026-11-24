@@ -21,6 +21,7 @@ import pandas as pd
 
 from backtesting.engine import BacktestEngine
 from backtesting.metrics import calc_all
+from features.timeframes import to_timedelta
 from backtesting.stats import deflated_sharpe_ratio, probabilistic_sharpe_ratio
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ class ParameterOptimizer:
         verbose:        bool = True,
     ) -> WFOResult:
         capital  = capital or self.engine.initial_capital
-        bar      = pd.Timedelta(self.config.get("timeframe", "1h"))
+        bar      = to_timedelta(self.config.get("timeframe", "1h"))
         data_end = df.index[-1] + bar
         windows  = make_windows(df.index[0], data_end, is_months, oos_months, step_months, mode)
         if not windows:

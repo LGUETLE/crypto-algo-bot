@@ -12,7 +12,7 @@ HS = pd.Timestamp("2023-07-01", tz="UTC")
 
 
 def _ohlcv(start, end, freq, seed):
-    idx = pd.date_range(start, end, freq=freq, tz="UTC", inclusive="left")
+    idx = pd.date_range(start, end, freq=freq.replace("d", "D"), tz="UTC", inclusive="left")
     rng = np.random.default_rng(seed)
     drift = np.repeat(rng.choice([-0.004, 0.004], len(idx) // 60 + 1), 60)[:len(idx)]
     close = 1000 * np.exp(np.cumsum(drift + rng.normal(0, 0.01, len(idx))))

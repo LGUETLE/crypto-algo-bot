@@ -52,8 +52,7 @@ class DonchianBreakoutStrategy(BaseStrategy):
             df["vol_ma_20"] = df["volume"].rolling(20).mean()
 
         core = ["dc_high", "dc_low", "dc_exit_high", "dc_exit_low", "atr_14"]
-        df.dropna(subset=[x for x in core if x in df.columns], inplace=True)
-        return df
+        return df.dropna(subset=[x for x in core if x in df.columns])
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         c = self.config

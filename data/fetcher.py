@@ -29,6 +29,7 @@ import pandas as pd
 import requests
 
 from features.macro import add_macro_trend
+from features.timeframes import to_timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ class DataFetcher:
 
         df = df[(df.index >= start) & (df.index < end)]
         # never return the still-forming candle: a candle is closed once open + duration <= now
-        df = df[df.index + pd.Timedelta(timeframe) <= pd.Timestamp.now(tz="UTC")]
+        df = df[df.index + to_timedelta(timeframe) <= pd.Timestamp.now(tz="UTC")]
         if df.empty:
             raise ValueError(f"No {timeframe} data for {symbol} in [{start}, {end})")
         self._report_gaps(df, timeframe, symbol)
@@ -304,7 +305,7 @@ class DataFetcher:
 
     @staticmethod
     def _report_gaps(df: pd.DataFrame, timeframe: str, symbol: str):
-        step = pd.Timedelta(timeframe)
+        step = to_timedelta(timeframe)
         gaps = df.index.to_series().diff().dropna()
         gaps = gaps[gaps > step]
         if len(gaps):

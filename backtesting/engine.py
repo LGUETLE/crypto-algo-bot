@@ -24,6 +24,7 @@ import pandas as pd
 import pandas_ta as ta
 
 from backtesting.metrics import calc_all, infer_periods_per_year, periods_per_year, print_report
+from features.timeframes import to_timedelta
 from risk.position_sizer import PositionSizer
 from risk.stops import update_trailing
 
@@ -278,7 +279,7 @@ class BacktestEngine:
         out = np.zeros(len(idx) + 1)
         if len(idx) == 0:
             return out
-        bar = pd.Timedelta(self.timeframe) if self.timeframe else (idx[1] - idx[0] if len(idx) > 1
+        bar = to_timedelta(self.timeframe) if self.timeframe else (idx[1] - idx[0] if len(idx) > 1
                                                                     else pd.Timedelta("1h"))
         lo, hi = idx[max(first - 1, 0)], idx[last] + bar
         if funding is None:

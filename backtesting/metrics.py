@@ -13,12 +13,14 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from features.timeframes import to_timedelta
+
 YEAR_SECONDS = 365 * 24 * 3600          # crypto trades 24/7: 365 days, no trading-day calendar
 
 
 def periods_per_year(timeframe: str) -> float:
     """Bars per year for a timeframe string ("1h" -> 8760, "4h" -> 2190, "1d" -> 365)."""
-    return YEAR_SECONDS / pd.Timedelta(timeframe).total_seconds()
+    return YEAR_SECONDS / to_timedelta(timeframe).total_seconds()
 
 
 def infer_periods_per_year(index: pd.Index) -> float:

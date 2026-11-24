@@ -69,3 +69,10 @@ def test_hist_vol_annualised_for_configured_timeframe():
     out = FeatureEngineer({"timeframe": "4h"}).transform(df)
     ref = df["close"].pct_change().rolling(20).std() * np.sqrt(2190)
     assert out["hist_vol"].iloc[-1] == pytest.approx(ref.iloc[-1])
+
+
+@pytest.mark.parametrize("tf,hours", [("15m", 0.25), ("1h", 1), ("4h", 4), ("1d", 24), ("1w", 168),
+                                      ("15min", 0.25)])
+def test_timeframe_parsing(tf, hours):
+    from features.timeframes import to_timedelta
+    assert to_timedelta(tf) == pd.Timedelta(hours=hours)

@@ -132,7 +132,7 @@ def _signals(strategy, df):
 
 
 def _macro(df, tf="1d"):
-    return df.resample(tf, label="left", closed="left").agg(
+    return df.resample(tf.replace("d", "D"), label="left", closed="left").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
 
 
@@ -169,7 +169,7 @@ def test_macro_merge_only_uses_closed_macro_candles():
     # every hourly bar of day D must see the close of day D-1, never day D
     for ts in out.index[30::17]:
         day_open      = ts.normalize()
-        expected_prev = macro["close"].get(day_open - pd.Timedelta("1d"), np.nan)
+        expected_prev = macro["close"].get(day_open - pd.Timedelta("1D"), np.nan)
         got           = out.loc[ts, "macro_close"]
         if np.isnan(expected_prev):
             assert np.isnan(got)
