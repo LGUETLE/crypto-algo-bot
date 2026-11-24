@@ -197,7 +197,7 @@ def _print_trades_summary(res):
         s = t[t["side"] == side]
         print(f"  {side.capitalize():<5} trades: {len(s):>4} | net PnL: {s['pnl_usdt'].sum():>10.2f} | "
               f"fees: {s['fees'].sum():>8.2f} | funding: {s['funding'].sum():>8.2f}")
-    print(f"  Exits: {dict(t['exit_reason'].value_counts())}")
+    print(f"  Exits: { {k: int(v) for k, v in t['exit_reason'].value_counts().items()} }")
 
 
 # ── Walk-forward optimisation ─────────────────────────────────────────────────

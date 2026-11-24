@@ -237,7 +237,7 @@ class BacktestEngine:
                 for side in ("long", "short"):
                     t = trades[trades["side"] == side]
                     print(f"\n  {side.capitalize():<5} trades: {len(t):>3} | PnL: ${t['pnl_usdt'].sum():>8.0f}")
-                print(f"  Exits: {dict(trades['exit_reason'].value_counts())}")
+                print(f"  Exits: { {k: int(v) for k, v in trades['exit_reason'].value_counts().items()} }")
             print_report(metrics)
 
         return BacktestResult(equity=equity, trades=trades, metrics=metrics, config=self.config)

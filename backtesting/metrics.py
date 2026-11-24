@@ -82,8 +82,8 @@ def print_report(metrics: dict):
     labels = {
         "total_return":     "Total return",
         "cagr":             "CAGR",
-        "best_day":         "Best period",
-        "worst_day":        "Worst period",
+        "best_day":         "Best bar",
+        "worst_day":        "Worst bar",
         "max_drawdown":     "Max drawdown",
         "avg_drawdown":     "Avg drawdown",
         "volatility":       "Volatility (ann.)",
@@ -107,7 +107,7 @@ def print_report(metrics: dict):
             v = metrics.get(k, "-")
             label = labels.get(k, k)
             if isinstance(v, float):
-                if k in ("total_return", "cagr", "max_drawdown", "win_rate",
+                if k in ("total_return", "cagr", "max_drawdown", "win_rate", "best_day", "worst_day",
                          "volatility", "var_95", "avg_drawdown"):
                     print(f"  {label:<25} {v:>8.1%}")
                 elif k in ("avg_win", "avg_loss", "expectancy"):
