@@ -47,6 +47,11 @@ python main.py --mode live                 # only after weeks of clean paper/dem
 
 Research results, method and limitations: see [RESEARCH.md](RESEARCH.md).
 
+Portfolio study (cross-asset time-series momentum, daily, point-in-time universe of liquid perps):
+`python main.py --mode tsmom` (research period) and, once, `--final-holdout`. The design and trial
+count are frozen in [docs/preregistration.md](docs/preregistration.md), parameters in
+`config/tsmom.yaml`. Research only: this strategy is not wired into the live bot.
+
 ## Research methodology
 
 **Data.** Binance USD-M perpetual candles and realised funding rates are the price-history proxy for
@@ -108,6 +113,8 @@ crypto-algo-bot/
 │   ├── settings.yaml            Exchange, strategy, risk, backtest parameters
 │   └── pairs.yaml               Active pairs (venue symbol + Binance data symbol)
 ├── data/fetcher.py              Binance history + funding (ccxt, archive fallback, cached parquet)
+├── data/universe.py             OKX X-Perp snapshot, Binance symbol inventory, daily panels
+├── docs/preregistration.md      Frozen design of the TSMOM study (written before any run)
 ├── features/
 │   ├── engineer.py              30+ technical features (exploration; not used by the strategies)
 │   ├── macro.py                 Higher-timeframe trend filter (no look-ahead)
@@ -121,6 +128,8 @@ crypto-algo-bot/
 │   ├── costs.py                 Gross vs net cost report, cost scenarios
 │   ├── benchmark.py             BTC buy & hold, vol-matched BTC, information ratio
 │   ├── research.py              Pipeline: data + hold-out guard, backtest/optimize/hold-out reports
+│   ├── portfolio.py             Multi-asset daily portfolio engine (TSMOM), point-in-time membership
+│   ├── tsmom_research.py        TSMOM study: variants, WFO, DSR (N = 7), benchmarks, hold-out
 │   └── research_log.py          Append-only JSONL research log
 ├── execution/
 │   ├── broker.py                Exchange-agnostic ccxt broker (paper / demo / live)
