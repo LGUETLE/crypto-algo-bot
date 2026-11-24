@@ -36,6 +36,23 @@ logger = logging.getLogger(__name__)
 OKX_IDS = ("okx", "myokx")
 
 
+# ── OKX Europe X-Perps ────────────────────────────────────────────────────────
+# X-Perps are listed by the EEA API as instType FUTURES with ruleType "xperp" (instId e.g.
+# "ETH-USD_UM_XPERP-310404", a far-dated expiry, settleCcy USD, ctVal 0.001 ETH). ccxt parses them
+# correctly (symbol "ETH/USD:USD-310404") but its okx default loads only spot + swap markets, so
+# futures must be requested explicitly. Public data helpers: data/okx.py.
+
+def is_xperp(market: dict) -> bool:
+    return (market.get("info") or {}).get("ruleType") == "xperp"
+
+
+def xperp_symbol(markets: dict, base: str) -> Optional[str]:
+    """ccxt symbol of the crypto X-Perp for a coin (independent of the expiry suffix), or None."""
+    hits = [m["symbol"] for m in markets.values()
+            if is_xperp(m) and m.get("base") == base and (m.get("info") or {}).get("instCategory") == "1"]
+    return hits[0] if hits else None
+
+
 class Broker:
     PAPER_START_BALANCE = 1000.0
 
@@ -63,6 +80,9 @@ class Broker:
 
     def _build_exchange(self):
         params = {"enableRateLimit": True, "options": {"defaultType": self.market_type}}
+        if self.exchange_id in OKX_IDS and self.market_type == "future":
+            # OKX Europe X-Perps are FUTURES markets; ccxt's okx only loads spot + swap by default
+            params["options"]["fetchMarkets"] = {"types": ["future"]}
         prefix = self.exchange_id.upper()
 
         if self.exchange_id == "hyperliquid":      # wallet based, no API key / passphrase

@@ -12,7 +12,10 @@ with open("config/settings.yaml") as f:
     config = yaml.safe_load(f)
 
 base = sys.argv[1].upper() if len(sys.argv) > 1 else "ETH"
-exchange = getattr(ccxt, config["exchange"])({"enableRateLimit": True})
+options = {}
+if config["exchange"] in ("okx", "myokx") and config.get("market_type") == "future":
+    options["fetchMarkets"] = {"types": ["future", "swap"]}      # X-Perps are FUTURES (ruleType xperp)
+exchange = getattr(ccxt, config["exchange"])({"enableRateLimit": True, "options": options})
 exchange.load_markets()
 
 print(f"{config['exchange']} derivative markets for {base}:\n")

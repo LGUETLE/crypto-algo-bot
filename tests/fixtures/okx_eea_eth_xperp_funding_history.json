@@ -1,0 +1,60 @@
+{
+ "code": "0",
+ "data": [
+  {
+   "formulaType": "withRate",
+   "fundingRate": "-0.0000869844819667",
+   "fundingTime": "1795478400000",
+   "instId": "ETH-USD_UM_XPERP-310404",
+   "instType": "FUTURES",
+   "method": "current_period",
+   "realizedRate": "-0.0000869844819667"
+  },
+  {
+   "formulaType": "withRate",
+   "fundingRate": "-0.0000802968917597",
+   "fundingTime": "1795449600000",
+   "instId": "ETH-USD_UM_XPERP-310404",
+   "instType": "FUTURES",
+   "method": "current_period",
+   "realizedRate": "-0.0000802968917597"
+  },
+  {
+   "formulaType": "withRate",
+   "fundingRate": "-0.0000308032807917",
+   "fundingTime": "1795420800000",
+   "instId": "ETH-USD_UM_XPERP-310404",
+   "instType": "FUTURES",
+   "method": "current_period",
+   "realizedRate": "-0.0000308032807917"
+  },
+  {
+   "formulaType": "withRate",
+   "fundingRate": "-0.0000155125455421",
+   "fundingTime": "1795392000000",
+   "instId": "ETH-USD_UM_XPERP-310404",
+   "instType": "FUTURES",
+   "method": "current_period",
+   "realizedRate": "-0.0000155125455421"
+  },
+  {
+   "formulaType": "withRate",
+   "fundingRate": "-0.0000564291730555",
+   "fundingTime": "1795363200000",
+   "instId": "ETH-USD_UM_XPERP-310404",
+   "instType": "FUTURES",
+   "method": "current_period",
+   "realizedRate": "-0.0000564291730555"
+  },
+  {
+   "formulaType": "withRate",
+   "fundingRate": "0.000032911443084",
+   "fundingTime": "1795334400000",
+   "instId": "ETH-USD_UM_XPERP-310404",
+   "instType": "FUTURES",
+   "method": "current_period",
+   "realizedRate": "0.000032911443084"
+  }
+ ],
+ "msg": ""
+}
