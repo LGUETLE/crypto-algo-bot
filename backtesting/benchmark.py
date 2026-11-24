@@ -25,6 +25,9 @@ from backtesting.metrics import calc_all, period_returns
 
 def _align(ohlc: pd.DataFrame, index: pd.DatetimeIndex) -> pd.DataFrame:
     """Benchmark candles on the strategy's bars (forward-filled over gaps in the benchmark data)."""
+    if len(index) and (index[0] < ohlc.index[0] or index[-1] > ohlc.index[-1]):
+        raise ValueError(f"Benchmark data [{ohlc.index[0]}, {ohlc.index[-1]}] does not cover the "
+                         f"strategy period [{index[0]}, {index[-1]}]")
     out = ohlc[["open", "close"]].reindex(ohlc.index.union(index)).ffill().reindex(index)
     if out.isna().any().any():
         raise ValueError("Benchmark data does not cover the strategy period")

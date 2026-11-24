@@ -70,3 +70,10 @@ def test_compare_table():
     bh = t.loc["BTC buy & hold"]
     assert bh["excess_return"] == pytest.approx(t.loc["Strategy", "total_return"] - bh["total_return"])
     assert {"sharpe", "max_drawdown", "calmar", "information_ratio"} <= set(t.columns)
+
+
+def test_benchmark_must_cover_end_of_period():
+    """Forward-filling past the end of the benchmark data would fake flat BTC returns."""
+    btc = _ohlc().iloc[:300]
+    with pytest.raises(ValueError):
+        buy_and_hold(btc, _ohlc().index, 10_000)
