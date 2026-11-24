@@ -40,7 +40,7 @@ Null hypothesis: the true Sharpe ratio after costs is <= 0.
 | Bars | 1h, timestamps = candle open time (UTC) |
 | Intrabar | 1m candles of the same instrument, used to replay stops when the high/low order matters |
 | Guardian | 1d candles; a daily candle becomes visible only after it has closed |
-| Funding | realised Binance funding rates, 8-hourly. **OKX Europe X-Perps settle funding hourly**, so Binance funding is a proxy for the level, not the schedule |
+| Funding | realised Binance funding rates, 8-hourly, as a proxy. OKX Europe X-Perps also settle 8-hourly (measured, see [Appendix A](#appendix-a-funding-on-okx-europe-x-perps-vs-binance)), but their rates differ from Binance's |
 | Benchmark | BTC/USDT USD-M perpetual, 1h, same bars |
 | Window | 2021-01-01 to 2026-11-01 (end exclusive) |
 | Research period | 2021-01-01 to 2025-11-01 |
@@ -263,7 +263,7 @@ results are void.
 - **Intrabar order within one minute** still uses the adverse rule. Its effect is small at 1m
   relative to a 0.8 % trailing distance.
 - **Proxy data.** Prices and funding are from Binance; the bot trades OKX Europe X-Perps, whose
-  funding settles hourly.
+  funding rates differ (Appendix A).
 - **Not modelled:** the daily-loss kill switch and the portfolio risk cap (with one pair and 2 % risk
   per trade the cap never binds). Minimum order sizes, partial fills and liquidation are also not
   modelled.
@@ -302,7 +302,7 @@ Design, parameters, variants, trial count and decision rule:
 | Primary candidates | Coin is a crypto X-Perp on OKX Europe today (snapshot `config/okx_xperps_snapshot.json`, 168 coins, retrieved 2026-11-24) **or** delisted from Binance (kept to avoid survivorship bias). 180 candidates, 57 were members at some point, among them LUNA, MATIC, TOMO and SXP |
 | Signal | Time-series momentum over 7/14/28/56 days: `sign` or `volscaled`; `long_flat` or `long_short` |
 | Sizing | Inverse volatility, 30 % p.a. portfolio vol target (60-day covariance), 25 % cap per asset, 2x gross cap, 0.05 no-trade band; daily rebalance at the open after the signal close |
-| Costs | 0.05 % taker per side; slippage 0.02 % (BTC, ETH) / 0.05 % (others) per side; historical Binance funding (OKX X-Perps settle hourly, so Binance is a proxy) |
+| Costs | 0.05 % taker per side; slippage 0.02 % (BTC, ETH) / 0.05 % (others) per side; historical Binance funding as a proxy (OKX X-Perp rates differ, Appendix A) |
 | Trials | N = 7: V1-V4 fixed variants, W1 rolling WFO, W2 anchored WFO (both choose among V1-V4 by IS Sharpe, IS 12 m / OOS 3 m), R1 = W1 on the Binance-wide universe |
 | Decision rule | Edge only if W1 has PSR >= 0.95 **and** DSR >= 0.95 on the stitched OOS, **and** a hold-out Sharpe > 0 |
 
@@ -442,7 +442,7 @@ conclusive.
   Binance-delisted coins are kept, but coins still on Binance that are not on OKX Europe are excluded,
   which can be optimistic. FTT, for example, was relisted on Binance and is therefore not in the
   primary universe. R1 (Binance-wide, no OKX filter) shows a lower Sharpe of 0.66 vs 0.84.
-- **Funding.** Binance 8-hourly funding is a proxy for OKX's hourly funding. Within a day, all
+- **Funding.** Binance funding is a proxy for OKX X-Perp funding, which was 2-6 %/yr higher for longs on most majors over the 74 days that can be compared (Appendix A). Within a day, all
   events are charged at the day's close price.
 - **Execution.**
   - The rebalance fills at the daily open with fixed slippage, with no market impact or
@@ -463,3 +463,41 @@ conclusive.
 | Research study (P2.2) | `python main.py --mode tsmom` | `aee0410` | 2026-11-24 01:48 |
 | Hold-out (P2.3) | `python main.py --mode tsmom --final-holdout` | `aee0410` | 2026-11-24 01:55 (hold-out logged 02:00) |
 | Statistical power (P2.5) | `python scripts/power_analysis.py` | this commit | deterministic (no data) |
+
+---
+
+# Appendix A: Funding on OKX Europe X-Perps vs Binance
+
+Measured on 2026-11-24 from public endpoints only (`python scripts/compare_funding.py`; OKX
+`/api/v5/public/funding-rate-history` on eea.okx.com, Binance from the `data.binance.vision`
+archive).
+
+- **Settlement interval: 8 hours** (00/08/16 UTC) for all ten coins checked, 100 % of intervals.
+  The preregistration stated "hourly"; Amendment 1 corrects this. No backtest number is affected,
+  because the backtests use Binance funding.
+- **History:** the public OKX endpoint returns funding only from **2026-08-17** on (about three
+  months), so only 74 days overlap with the Binance archive, which ends 2026-10-31.
+
+| Coin | Days | OKX (% / yr, long pays) | Binance (% / yr) | Difference | Corr. of daily sums | Mean abs. daily diff. (bp) |
+|---|---:|---:|---:|---:|---:|---:|
+| BTC | 74 | 1.69 % | 5.79 % | −4.10 % | 0.04 | 2.99 |
+| ETH | 74 | 6.99 % | 4.79 % | +2.20 % | 0.01 | 1.41 |
+| SOL | 74 | 6.12 % | 4.10 % | +2.02 % | 0.21 | 1.45 |
+| XRP | 74 | 9.10 % | 4.62 % | +4.48 % | 0.29 | 1.41 |
+| DOGE | 74 | 9.55 % | 6.46 % | +3.09 % | 0.09 | 1.12 |
+| BNB | 74 | 10.05 % | 3.69 % | +6.36 % | 0.14 | 1.97 |
+| ADA | 74 | 10.22 % | 5.01 % | +5.21 % | 0.15 | 1.55 |
+| LINK | 74 | 10.78 % | 5.53 % | +5.25 % | 0.22 | 2.03 |
+| AVAX | 74 | 10.36 % | 4.97 % | +5.39 % | 0.18 | 1.62 |
+| LTC | 74 | 9.54 % | 6.27 % | +3.28 % | −0.04 | 1.25 |
+
+**Reading:**
+
+- Over this short window, OKX X-Perp funding cost longs about 2–6 %/yr more than Binance on most
+  majors (BTC: 4 %/yr less).
+- Day-to-day, the two series are nearly uncorrelated (0.0–0.3).
+- For a long-biased strategy at 1x gross, Binance funding therefore **understates** the funding
+  cost on OKX by roughly 2–6 %/yr.
+
+Binance stays the proxy for pre-2026 backtests (OKX X-Perps did not exist). The forward paper trade
+(`tsmom-v1`) uses the OKX X-Perps' own funding.
