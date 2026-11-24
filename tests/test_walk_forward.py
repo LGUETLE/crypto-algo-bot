@@ -73,10 +73,12 @@ def test_wfo_stitches_oos_equity(mode):
     assert r.equity.index.is_monotonic_increasing and not r.equity.index.duplicated().any()
     assert r.equity.index[0] >= w["oos_start"].iloc[0]
     assert r.equity.index[-1] < w["oos_end"].iloc[-1]
-    # every OOS trade lies inside its own OOS window
+    # every OOS trade CLOSES inside the window it is attributed to and was opened out of sample
+    # (positions may be carried over from an earlier window)
     for _, t in r.trades.iterrows():
         win = w[w["window"] == t["window"]].iloc[0]
-        assert win["oos_start"] <= t["entry_time"] < win["oos_end"]
+        assert win["oos_start"] <= t["exit_time"] < win["oos_end"]
+        assert t["entry_time"] >= w["oos_start"].iloc[0] and t["entry_time"] <= t["exit_time"]
     # compounding: total return equals the product of the window returns
     assert (1 + r.metrics["total_return"]) == pytest.approx(np.prod(1 + w["oos_return"]), rel=1e-9)
     assert 0 <= r.metrics["psr"] <= 1 and 0 <= r.metrics["dsr"] <= 1
@@ -138,3 +140,29 @@ def test_py_converts_integral_floats():
     from backtesting.optimizer import _py
     assert _py(40.0) == 40 and isinstance(_py(40.0), int)
     assert _py(np.float64(0.3)) == 0.3 and _py(np.int64(5)) == 5
+
+
+def test_engine_state_handover_equals_one_continuous_run():
+    """Splitting a run in two with the open position carried over must equal one run."""
+    from tests.test_lookahead import CONFIG, ScriptedStrategy, ohlcv
+    df = ohlcv(300)
+    cut = df.index[150]
+    strat = ScriptedStrategy(CONFIG, entries={100: 1}, exits={200})
+    eng = BacktestEngine(CONFIG)
+    whole = eng.run(df, strat, verbose=False)
+    a = eng.run(df, strat, verbose=False, end=cut, close_at_end=False)
+    assert a.trades.empty and a.state["position"] is not None
+    b = eng.run(df, strat, verbose=False, start=cut, capital=float(a.equity.iloc[-1]), state=a.state)
+    pd.testing.assert_series_equal(pd.concat([a.equity, b.equity]), whole.equity)
+    pd.testing.assert_frame_equal(b.trades, whole.trades)
+
+
+def test_wfo_carries_positions_across_windows():
+    df = trending()
+    r = _opt().walk_forward_optimize(df, DonchianBreakoutStrategy, GRID, is_months=6, oos_months=3,
+                                     min_trades=3, verbose=False)
+    assert r.metrics["window_end_exits"] == 0
+    last = r.windows["window"].max()
+    assert (r.trades.loc[r.trades["exit_reason"] == "End", "window"] == last).all()
+    # trade PnL still reconciles with the stitched equity
+    assert r.trades["pnl_usdt"].sum() == pytest.approx(r.equity.iloc[-1] - 10_000, abs=1e-6)

@@ -15,8 +15,9 @@ Features:
 Accounting: `size` is in coins, so PnL = price difference * size.
 Leverage only reduces the margin that is locked, it does NOT multiply PnL.
 """
+import copy
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -57,6 +58,7 @@ class BacktestResult:
     trades:  pd.DataFrame
     metrics: dict
     config:  dict
+    state:   dict = field(default_factory=dict)   # {"cash", "position"} after the last bar
 
 
 class BacktestEngine:
@@ -96,7 +98,8 @@ class BacktestEngine:
         return df
 
     def run(self, df, strategy, symbol="BTC/USDT:USDT", capital=None, verbose=True,
-            start=None, end=None, funding: Optional[pd.Series] = None) -> BacktestResult:
+            start=None, end=None, funding: Optional[pd.Series] = None,
+            state: Optional[dict] = None, close_at_end: bool = True) -> BacktestResult:
         """
         Event order per bar t (timestamps are candle OPEN times):
           1. orders decided on the close of bar t-1 are filled at the OPEN of bar t:
@@ -121,6 +124,10 @@ class BacktestEngine:
 
         start / end (optional, end exclusive) restrict TRADING to a window. Indicators are still
         computed on all rows of `df`, so history before `start` serves as warm-up.
+
+        state / close_at_end: hand an open position from one run to the next (walk-forward windows).
+        With close_at_end=False an open position stays open (equity marked to the last close) and
+        is returned in result.state; pass that state (and capital = last equity) to the next run.
         """
         capital = capital or self.initial_capital
         full = self.prepare(df, strategy)
@@ -133,7 +140,8 @@ class BacktestEngine:
         pos_idx = np.flatnonzero(mask.to_numpy())
         if len(pos_idx) == 0:
             empty = pd.Series(dtype=float, name="equity")
-            return BacktestResult(equity=empty, trades=pd.DataFrame(), metrics={}, config=self.config)
+            return BacktestResult(equity=empty, trades=pd.DataFrame(), metrics={}, config=self.config,
+                                  state=state or {"cash": float(capital), "position": None})
         first, last = pos_idx[0], pos_idx[-1]
         if last - first + 1 != len(pos_idx):
             raise ValueError("start/end must select a contiguous block of bars")
@@ -148,6 +156,9 @@ class BacktestEngine:
         fund = self._funding_per_bar(idx, first, last, funding)
 
         cash, position = float(capital), None
+        if state:
+            cash = float(state["cash"])
+            position = copy.copy(state["position"]) if state.get("position") is not None else None
         equity_vals, closed_trades = [], []
 
         for i in range(first, last + 1):
@@ -208,7 +219,7 @@ class BacktestEngine:
             equity_vals.append(cash + locked + unreal)
 
         # Close a position still open at the end of the window at the final close (with costs)
-        if position is not None:
+        if position is not None and close_at_end:
             if fund[last + 1] != 0.0:              # events inside the final bar
                 d = 1 if position.side == "long" else -1
                 pay = -d * position.size * c[last] * fund[last + 1]
@@ -232,7 +243,8 @@ class BacktestEngine:
                 print(f"  Exits: { {k: int(v) for k, v in trades['exit_reason'].value_counts().items()} }")
             print_report(metrics)
 
-        return BacktestResult(equity=equity, trades=trades, metrics=metrics, config=self.config)
+        return BacktestResult(equity=equity, trades=trades, metrics=metrics, config=self.config,
+                              state={"cash": cash, "position": position})
 
     # ── Exit logic ────────────────────────────────────────────────────────
 

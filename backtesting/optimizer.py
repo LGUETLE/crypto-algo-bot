@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from backtesting.engine import BacktestEngine
+from strategies.base_strategy import BaseStrategy
 from backtesting.metrics import calc_all
 from features.timeframes import to_timedelta
 from backtesting.stats import deflated_sharpe_ratio, probabilistic_sharpe_ratio
@@ -28,6 +29,20 @@ logger = logging.getLogger(__name__)
 
 METRIC_COLS = ("sharpe", "total_return", "max_drawdown", "profit_factor", "win_rate", "total_trades",
                "sharpe_per_period", "n_periods", "skew", "kurtosis")
+
+
+class FlatStrategy(BaseStrategy):
+    """Used for OOS windows without a valid parameter set: no entries, and a position carried in
+    from the previous window is closed at the first open."""
+
+    def add_indicators(self, df):
+        return df
+
+    def generate_signals(self, df):
+        df["signal"] = 0
+        df["long_exit"] = True
+        df["short_exit"] = True
+        return df
 
 
 @dataclass
@@ -182,6 +197,7 @@ class ParameterOptimizer:
 
         rows, eq_parts, tr_parts, trial_vars = [], [], [], []
         equity_now = capital
+        carry = None             # open position handed from one OOS window to the next
         for w in windows:
             trials = self.evaluate_grid(df, strategy_class, param_grid, w.is_start, w.is_end, funding, symbol)
             valid  = self.filter_valid(trials, min_trades, max_dd_limit)
@@ -192,13 +208,16 @@ class ParameterOptimizer:
             row = {"window": w.n, "is_start": w.is_start, "is_end": w.is_end,
                    "oos_start": w.oos_start, "oos_end": w.oos_end, "n_valid": len(valid)}
 
-            oos_df = df[df.index < w.oos_end]
+            oos_df   = df[df.index < w.oos_end]
+            is_last  = w.n == windows[-1].n
             if valid.empty:
                 params = None
-                idx = df.index[(df.index >= w.oos_start) & (df.index < w.oos_end)]
-                eq  = pd.Series(equity_now, index=idx, name="equity")    # stay flat
-                oos_m, oos_t = calc_all(eq, pd.DataFrame(), equity_now,
-                                        self.engine.periods_per_year(idx)), pd.DataFrame()
+                res = self.engine.run(oos_df, FlatStrategy(self.config), symbol, capital=equity_now,
+                                      verbose=False, start=w.oos_start, end=w.oos_end, funding=funding,
+                                      state=carry, close_at_end=True)
+                eq, oos_m, oos_t, carry = res.equity, res.metrics, res.trades, None
+                if not oos_t.empty:
+                    oos_t = oos_t.assign(window=w.n)
                 row.update({k: None for k in keys})
                 row.update({"is_sharpe": np.nan, "is_trades": 0, "is_dsr": np.nan})
             else:
@@ -210,10 +229,13 @@ class ParameterOptimizer:
                     "is_dsr": deflated_sharpe_ratio(best["sharpe_per_period"], int(best["n_periods"]),
                                                     best["skew"], best["kurtosis"], n_trials, v_sr),
                 })
+                # an open position from the previous window is carried over and managed with the
+                # new parameters (as the live bot would after a parameter update)
                 res = self.engine.run(oos_df, strategy_class({**self.config, **params}), symbol,
                                       capital=equity_now, verbose=False, start=w.oos_start,
-                                      end=w.oos_end, funding=funding)
-                eq, oos_m, oos_t = res.equity, res.metrics, res.trades
+                                      end=w.oos_end, funding=funding, state=carry,
+                                      close_at_end=is_last)
+                eq, oos_m, oos_t, carry = res.equity, res.metrics, res.trades, res.state
                 if not oos_t.empty:
                     oos_t = oos_t.assign(window=w.n)
 
@@ -251,8 +273,8 @@ class ParameterOptimizer:
                                                metrics["skew"], metrics["kurtosis"], n_variants, v_mean)
         metrics["dsr_n_variants"]    = n_variants
         metrics["trial_sr_variance"] = v_mean
-        # Positions still open at an OOS window end are force-closed ("End") and the next window
-        # starts flat; the live bot would keep them. Report how much that matters.
+        # Open positions are carried across OOS windows; only the final window closes at its end.
+        # Kept as a check: forced "End" exits before the last window (should be 0).
         last_w = windows[-1].n
         forced = trades[(trades["exit_reason"] == "End") & (trades["window"] != last_w)] \
             if not trades.empty else trades
