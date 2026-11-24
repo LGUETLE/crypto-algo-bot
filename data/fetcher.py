@@ -297,11 +297,16 @@ class DataFetcher:
 
     @staticmethod
     def _cache_valid(path: str, end: pd.Timestamp) -> bool:
+        """
+        Immutable only if the file was written AFTER the window ended (then it holds the complete
+        window). A file written while the window was still open is truncated and expires after 24 h.
+        """
         if not os.path.exists(path):
             return False
-        if end <= pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1):
-            return True                                      # fixed past window: immutable
-        return (time.time() - os.path.getmtime(path)) / 3600 < 24
+        mtime = os.path.getmtime(path)
+        if mtime >= end.timestamp():
+            return True
+        return (time.time() - mtime) / 3600 < 24
 
     @staticmethod
     def _report_gaps(df: pd.DataFrame, timeframe: str, symbol: str):

@@ -140,3 +140,18 @@ def test_real_archive_download(tmp_path):
     assert len(df) == 31 * 24
     fr = f.funding_history("ETH/USDT:USDT", "2024-01-01", "2024-02-01")
     assert len(fr) == 31 * 3
+
+
+def test_cache_written_before_window_end_is_not_immutable(tmp_path):
+    """A cache file written while the window was still open holds truncated data; it must be
+    refreshed later instead of being treated as an immutable past window."""
+    import os
+    path = tmp_path / "x.parquet"
+    path.write_bytes(b"x")
+    end = pd.Timestamp("2021-01-01 02:00", tz="UTC")
+    written = (end - pd.Timedelta(days=10)).timestamp()            # written 10 days before `end`
+    os.utime(path, (written, written))
+    assert not DataFetcher._cache_valid(str(path), end)
+    complete = (end + pd.Timedelta(hours=1)).timestamp()            # written after the window closed
+    os.utime(path, (complete, complete))
+    assert DataFetcher._cache_valid(str(path), end)
