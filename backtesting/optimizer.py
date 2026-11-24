@@ -297,9 +297,9 @@ def _py(v):
     """numpy scalar -> plain Python (ints stay ints)."""
     if isinstance(v, (np.integer,)):
         return int(v)
-    if isinstance(v, (np.floating,)):
+    if isinstance(v, (np.floating, float)):
         f = float(v)
-        return int(f) if f.is_integer() else f
+        return int(f) if np.isfinite(f) and f.is_integer() else f
     return v
 
 

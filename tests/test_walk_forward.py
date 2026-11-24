@@ -132,3 +132,9 @@ def test_param_stability_summary():
     s = param_stability(w, ["a", "b"])
     assert s["n_distinct_sets"] == 3 and s["change_rate"] == pytest.approx(2 / 3)
     assert s["value_counts"]["a"] == {"1": 2, "2": 2}
+
+
+def test_py_converts_integral_floats():
+    from backtesting.optimizer import _py
+    assert _py(40.0) == 40 and isinstance(_py(40.0), int)
+    assert _py(np.float64(0.3)) == 0.3 and _py(np.int64(5)) == 5
