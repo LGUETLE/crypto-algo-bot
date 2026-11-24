@@ -1,0 +1,39 @@
+# Temporary: checks which public market-data endpoints GitHub-hosted runners can reach.
+name: probe-endpoints
+on:
+  push:
+    branches: [ci-probe]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: binance-archive-daily-kline
+        continue-on-error: true
+        run: curl -sf -o /dev/null "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1d/BTCUSDT-1d-$(date -u -d '2 days ago' +%F).zip"
+      - name: binance-archive-monthly-funding
+        continue-on-error: true
+        run: curl -sf -o /dev/null "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-10.zip"
+      - name: binance-fapi
+        continue-on-error: true
+        run: curl -sf -o /dev/null "https://fapi.binance.com/fapi/v1/ping"
+      - name: binance-data-api-spot
+        continue-on-error: true
+        run: curl -sf -o /dev/null "https://data-api.binance.vision/api/v3/ping"
+      - name: okx-eea-instruments
+        continue-on-error: true
+        run: curl -sf "https://eea.okx.com/api/v5/public/instruments?instType=FUTURES" | grep -q xperp
+      - name: okx-eea-candles
+        continue-on-error: true
+        run: curl -sf "https://eea.okx.com/api/v5/market/history-candles?instId=BTC-USD_UM_XPERP-310404&bar=1Dutc&limit=5" | grep -q '"code":"0"'
+      - name: okx-eea-funding-history
+        continue-on-error: true
+        run: curl -sf "https://eea.okx.com/api/v5/public/funding-rate-history?instId=BTC-USD_UM_XPERP-310404&limit=5" | grep -q fundingRate
+      - name: okx-global-ticker
+        continue-on-error: true
+        run: curl -sf "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP" | grep -q '"code":"0"'
+      - name: bybit-ticker
+        continue-on-error: true
+        run: curl -sf "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT" | grep -q '"retCode":0'
+      - name: runner-location
+        continue-on-error: true
+        run: curl -sf https://ipinfo.io/country
