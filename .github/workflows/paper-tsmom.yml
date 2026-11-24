@@ -1,0 +1,51 @@
+# Forward paper trading of tsmom-v1 (docs/preregistration.md, Amendment 2).
+# Public market data only (OKX Europe X-Perps), no API keys, no orders.
+# State, data and the daily log live on the branch `paper-state`, never on main.
+name: paper-tsmom
+on:
+  schedule:
+    - cron: "20 0 * * *"          # daily, after the 00:00 UTC daily close
+  workflow_dispatch:
+  push:                            # TEMPORARY: verification run from the feature branch
+    branches: [okx-xperps-paper]
+    paths: [".github/workflows/paper-tsmom.yml", "paper/**"]
+permissions:
+  contents: write
+concurrency:
+  group: paper-tsmom
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Check out paper-state (create it on the first run)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$URL" paper-state >/dev/null; then
+            git clone --quiet --branch paper-state --single-branch "$URL" state
+          else
+            mkdir state && cd state && git init --quiet -b paper-state && git remote add origin "$URL"
+            printf "# paper-state\n\nAutomated state of the tsmom-v1 paper trade (see main: docs/preregistration.md, Amendment 2).\nDo not edit by hand.\n" > README.md
+          fi
+      - name: Run tsmom-v1
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m paper.tsmom_paper --state state
+      - name: Commit state
+        run: |
+          cd state
+          git config user.name "paper-tsmom bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit --quiet -m "tsmom-v1 $(jq -r .last_closed_day summary.json): $(jq -r .status summary.json)" || echo "no changes"
+          git push --quiet origin paper-state
