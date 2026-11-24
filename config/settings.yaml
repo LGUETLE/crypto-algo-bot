@@ -50,7 +50,7 @@ backtest:
   holdout_start:    "2025-11-01"
   lookback_days:    1095
   walk_forward_pct: 0.3        # split_consistency_check(): share of each block labelled "OOS"
-  commission:       0.0006     # taker fee per side - set it to YOUR venue's fee tier
+  commission:       0.0005     # taker fee per side: OKX Europe X-Perps standard tier (0.02 % maker / 0.05 % taker)
   slippage:         0.0002     # per side
   funding_rate_8h:  0.0001     # FALLBACK only, if historical funding cannot be loaded (warns)
   risk_free_rate:   0.0        # annual, used in Sharpe/Sortino (0 = crypto convention)
