@@ -65,6 +65,22 @@ Portfolio study (cross-asset time-series momentum, daily, point-in-time universe
 count are frozen in [docs/preregistration.md](docs/preregistration.md), parameters in
 `config/tsmom.yaml`. Research only: this strategy is not wired into the live bot.
 
+**Forward paper trading (`tsmom-v1`).** The frozen configuration (preregistration Amendment 2) runs
+daily via GitHub Actions (`.github/workflows/paper-tsmom.yml`, 00:20 UTC) on public OKX Europe
+X-Perp data. Data, state, `summary.json`, `report.md` and a daily `log.jsonl` are committed to the
+branch [`paper-state`](../../tree/paper-state), never to main. The track record starts at the open of
+2026-11-25; quarterly reports, formal verdict after 12 months. No orders are sent anywhere.
+
+## OKX Europe X-Perps
+
+X-Perps are listed by the EEA API (`eea.okx.com`) as instType **FUTURES** with `ruleType: xperp`
+(instId e.g. `ETH-USD_UM_XPERP-310404`, settle USD, 0.001 ETH per contract, lot = 1 contract).
+ccxt parses them (symbol `ETH/USD:USD-310404`) once futures markets are loaded, which the broker does
+for `exchange: myokx`, `market_type: future`. `python scripts/list_markets.py ETH` lists them. The
+demo environment uses different instIds (e.g. `-310328`); resolve symbols with
+`execution.broker.xperp_symbol()`. Funding settles every 8 hours (RESEARCH.md, Appendix A).
+`scripts/verify_demo_stops.py` checks the fill-based stop move in simulated trading only.
+
 ## Research methodology
 
 **Data.** Binance USD-M perpetual candles and realised funding rates are the price-history proxy for
@@ -152,8 +168,12 @@ crypto-algo-bot/
 │   ├── stops.py                 Intrabar stop / trailing / TP simulation (shared by backtest and paper)
 │   └── guard.py                 Kill switch, position slots, portfolio risk budget
 ├── notify/telegram_bot.py       Telegram alerts
+├── paper/tsmom_paper.py         Daily forward paper run of tsmom-v1 (GitHub Actions)
 ├── scripts/
-│   ├── list_markets.py          Find the right derivative symbol on the venue
+│   ├── list_markets.py          Find the right derivative symbol on the venue (incl. X-Perps)
+│   ├── compare_funding.py       OKX X-Perp vs Binance funding (public data)
+│   ├── power_analysis.py        Sharpe standard errors / years needed (RESEARCH.md P2.5)
+│   ├── verify_demo_stops.py     Simulated-trading check of the fill-based stop move
 │   └── audit_holdout_bar.py     One-time audit of the ETH hold-out (already run, logged)
 └── tests/                       pytest suite
 ```

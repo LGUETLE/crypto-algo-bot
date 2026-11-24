@@ -6,9 +6,6 @@ on:
   schedule:
     - cron: "20 0 * * *"          # daily, after the 00:00 UTC daily close
   workflow_dispatch:
-  push:                            # TEMPORARY: verification run from the feature branch
-    branches: [okx-xperps-paper]
-    paths: [".github/workflows/paper-tsmom.yml", "paper/**"]
 permissions:
   contents: write
 concurrency:
