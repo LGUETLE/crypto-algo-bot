@@ -1,0 +1,35 @@
+# Cross-asset time-series momentum - parameters FROZEN by docs/preregistration.md.
+# Do not edit: any change is an amendment (append it to the preregistration with date and reason)
+# and increases the trial count. tests/test_portfolio_config.py pins these values.
+data:
+  start_date:    "2021-01-01"
+  end_date:      "2026-11-01"
+  holdout_start: "2025-11-01"
+universe:
+  mode:          primary          # primary | binance_wide (R1 robustness)
+  n_enter:       12
+  n_stay:        15
+  volume_window: 30
+  min_history:   90
+  delisted_before: "2026-10"
+signal:
+  lookbacks:     [7, 14, 28, 56]
+  vol_window:    60
+portfolio:
+  cov_window:    60
+  vol_target:    0.30
+  cap_asset:     0.25
+  cap_gross:     2.0
+  band:          0.05
+  capital:       10000.0
+costs:
+  commission:     0.0005
+  slippage_major: 0.0002
+  slippage_other: 0.0005
+  majors:         [BTCUSDT, ETHUSDT]
+validation:
+  is_months:     12
+  oos_months:    3
+  metric:        sharpe
+  n_trials:      7
+research_log:    logs/research_log.jsonl

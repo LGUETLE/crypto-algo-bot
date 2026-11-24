@@ -65,8 +65,10 @@ def _ms_to_utc(values: pd.Series) -> pd.DatetimeIndex:
 
 
 class DataFetcher:
-    def __init__(self, exchange_id: str = "okx", cache_dir: str = CACHE_DIR, session=None):
+    def __init__(self, exchange_id: str = "okx", cache_dir: str = CACHE_DIR, session=None,
+                 use_rest: bool = True):
         self.exchange_id   = exchange_id
+        self.use_rest      = use_rest       # False: go straight to the archive (REST known blocked)
         self.cache_dir     = cache_dir
         self._live         = None
         self._hist         = None
@@ -123,11 +125,14 @@ class DataFetcher:
             return df
 
         try:
+            if not self.use_rest:
+                raise RuntimeError("REST disabled")
             df = self._ccxt_ohlcv(symbol, timeframe, start, end)
             source = "ccxt/binance"
         except Exception as e:                              # noqa: BLE001 - any API failure -> archive
-            logger.warning(f"Binance REST unavailable ({type(e).__name__}: {str(e)[:120]}); "
-                           f"using the data.binance.vision archive")
+            if self.use_rest:
+                logger.warning(f"Binance REST unavailable ({type(e).__name__}: {str(e)[:120]}); "
+                               f"using the data.binance.vision archive")
             df = self._archive_ohlcv(symbol, timeframe, start, end)
             source = "data.binance.vision"
 
@@ -156,11 +161,14 @@ class DataFetcher:
             return pd.read_parquet(path)["funding_rate"]
 
         try:
+            if not self.use_rest:
+                raise RuntimeError("REST disabled")
             s = self._ccxt_funding(symbol, start, end)
             source = "ccxt/binance"
         except Exception as e:                              # noqa: BLE001
-            logger.warning(f"Binance REST funding unavailable ({type(e).__name__}: {str(e)[:120]}); "
-                           f"using the data.binance.vision archive")
+            if self.use_rest:
+                logger.warning(f"Binance REST funding unavailable ({type(e).__name__}: {str(e)[:120]}); "
+                               f"using the data.binance.vision archive")
             s = self._archive_funding(symbol, start, end)
             source = "data.binance.vision"
 
