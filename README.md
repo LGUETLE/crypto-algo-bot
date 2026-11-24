@@ -2,6 +2,19 @@
 
 Systematic futures trading bot (Python + ccxt). Exchange-agnostic: OKX Europe (X-Perps), OKX, Bitget, Hyperliquid (experimental).
 
+## Research summary
+
+Two strategies have been evaluated with a look-ahead-free engine, realistic costs (fees, slippage,
+historical funding), walk-forward validation, Deflated Sharpe Ratios and a one-time final hold-out.
+Full method, numbers and limitations: [RESEARCH.md](RESEARCH.md).
+
+| Study | Verdict |
+|---|---|
+| ETH Donchian breakout, 1h ([Part 1](RESEARCH.md#part-1-eth-donchian-breakout-1h)) | **Concluded: no edge after costs.** −69 % on the research period; about 0 % even without any costs |
+| Cross-asset time-series momentum, daily portfolio ([Part 2](RESEARCH.md#part-2-cross-asset-time-series-momentum-daily-portfolio), [preregistration](docs/preregistration.md)) | **No demonstrated edge** under the preregistered rule (DSR 0.86 < 0.95; hold-out Sharpe −0.09). The evidence supports a drawdown-reducing overlay, not demonstrated alpha. Forward paper trading as `tsmom-v1` |
+
+Nothing in this repository is a performance claim beyond these documented, reproducible runs.
+
 ## Features
 - Strategies: Donchian breakout, EMA crossover, RSI mean reversion (pluggable via `BaseStrategy`)
 - ATR-based stop loss, trailing stop, higher-timeframe trend filter ("guardian")

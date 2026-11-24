@@ -59,3 +59,13 @@ def test_monte_carlo_selection_bias_is_removed():
     psr = probabilistic_sharpe_ratio(srs[best], 0.0, n_obs)
     dsr = deflated_sharpe_ratio(srs[best], n_obs, 0.0, 3.0, n_trials, srs.var(ddof=1))
     assert psr > 0.95 and dsr < 0.8
+
+
+def test_sharpe_standard_error_daily_and_years_needed():
+    from backtesting.stats import sharpe_standard_error, years_to_confirm
+    # one year of daily data: SE of the annualised Sharpe is about 1
+    assert sharpe_standard_error(0.0, 365, 365) == pytest.approx(1.0)
+    se = sharpe_standard_error(0.84, 1400, 365)
+    assert se == pytest.approx(math.sqrt((1 + (0.84 / math.sqrt(365)) ** 2 / 2) / 1400) * math.sqrt(365))
+    y = years_to_confirm(0.8)
+    assert 0.8 / sharpe_standard_error(0.8, round(y * 365), 365) == pytest.approx(1.645, rel=1e-3)

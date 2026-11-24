@@ -55,3 +55,19 @@ def deflated_sharpe_ratio(sr: float, n_obs: int, skew: float, kurt: float,
     """PSR against the expected maximum SR of `n_trials` trials (selection-bias corrected)."""
     sr0 = expected_max_sharpe(n_trials, trials_sr_variance)
     return probabilistic_sharpe_ratio(sr, sr0, n_obs, skew, kurt)
+
+
+def sharpe_standard_error(sr_annual: float, n_obs: int, periods_per_year: float) -> float:
+    """
+    Standard error of an ANNUALISED Sharpe ratio estimated from n_obs returns (Lo 2002, iid):
+    SE(SR_period) = sqrt((1 + SR_period^2 / 2) / T), annualised with sqrt(periods_per_year).
+    """
+    sr_p = sr_annual / math.sqrt(periods_per_year)
+    return math.sqrt((1 + sr_p ** 2 / 2) / n_obs) * math.sqrt(periods_per_year)
+
+
+def years_to_confirm(sr_annual: float, z: float = 1.645, periods_per_year: float = 365) -> float:
+    """Years of data needed before SR_annual / SE(SR) >= z (one-sided 95 % for z = 1.645)."""
+    sr_p = sr_annual / math.sqrt(periods_per_year)
+    n = (z / sr_p) ** 2 * (1 + sr_p ** 2 / 2)
+    return n / periods_per_year

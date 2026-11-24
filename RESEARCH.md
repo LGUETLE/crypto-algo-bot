@@ -390,7 +390,53 @@ nonetheless clearly different from Part 1:
 That is the profile of a trend-following, risk-reducing overlay, not of a stand-alone return source
 with demonstrated alpha. No parameter was changed after the hold-out.
 
-## P2.5 Limitations
+## P2.5 Statistical power: what these samples can and cannot show
+
+Standard error of a Sharpe ratio estimated from T returns (Lo 2002, iid):
+SE(SR_period) = sqrt((1 + SR_period² / 2) / T), annualised with sqrt(365) for daily data. Computed
+with `python scripts/power_analysis.py`:
+
+| Sample | Sharpe | T (days) | SE | 95 % interval (two-sided) |
+|---|---:|---:|---:|---:|
+| Hold-out (1 year, V1) | −0.09 | 365 | 1.00 | −2.05 to +1.87 |
+| W1 stitched OOS (3.8 years) | 0.84 | 1,400 | 0.51 | −0.16 to +1.84 |
+| R1 Binance-wide OOS (3.8 years) | 0.66 | 1,400 | 0.51 | −0.34 to +1.66 |
+
+Years of daily data needed before a true Sharpe is confirmed as > 0:
+
+| True Sharpe | One-sided 95 % | Two-sided 95 % |
+|---:|---:|---:|
+| 0.84 | 3.8 years | 5.4 years |
+| **0.80** | **4.2 years** | **6.0 years** |
+| 0.66 | 6.2 years | 8.8 years |
+| 0.50 | 10.8 years | 15.4 years |
+
+**What this means:**
+
+- **A 1-year hold-out cannot tell SR 0 from SR 0.8.** With an SE of about 1.0, it can only confirm a
+  Sharpe above 1.64 (one-sided 95 %). It can expose gross failures such as Part 1, but it cannot
+  confirm a moderate edge. The hold-out Sharpe of −0.09 is fully compatible with a true Sharpe of 0.8.
+- **The 3.8-year walk-forward cannot confirm SR 0.84 at 95 % two-sided.** Its interval includes 0.
+  The one-sided PSR of 0.95 sits exactly at the edge, and the DSR adjusts for the 7 trials on top.
+- **Beating passive BTC cannot be shown at all with these samples.** Telling SR 0.84 apart from
+  vol-matched BTC at 0.69 (information ratio 0.11) would take on the order of 224 years of data.
+- **Bias.** The Binance-wide universe (R1, Sharpe 0.66) is the **less biased estimate**, because it
+  does not use today's OKX listing to choose coins. It is the number to plan with, and it needs
+  about 6 years (one-sided) to confirm.
+- **Assumptions.** The formula assumes iid returns. The daily return kurtosis of about 8 changes the
+  SE by less than 1 % at these Sharpe levels. Serial correlation, which momentum can induce, is not
+  accounted for and would widen the intervals.
+
+**Verdict.** The evidence supports TSMOM as a **drawdown-reducing overlay**:
+
+- its maximum drawdown was −27.5 % vs −66.9 % for BTC over the same OOS days;
+- in the falling hold-out year it lost −5.7 % vs −29.2 % for BTC.
+
+It does **not** demonstrate alpha. Forward paper trading (`tsmom-v1`, see the preregistration
+amendment) builds up an independent track record, which needs years rather than months to become
+conclusive.
+
+## P2.6 Limitations
 
 - **Universe.** The OKX filter can only use today's list (all X-Perps were listed in 2026).
   Binance-delisted coins are kept, but coins still on Binance that are not on OKX Europe are excluded,
@@ -408,7 +454,7 @@ with demonstrated alpha. No parameter was changed after the hold-out.
   the same market history are not included, so the true multiple-testing burden is higher.
 - **Single hold-out year.** One year of a falling market is a small sample (PSR 0.46).
 
-## P2.6 Reproducibility
+## P2.7 Reproducibility
 
 | What | Command | Commit | Time (UTC) |
 |---|---|---|---|
@@ -416,3 +462,4 @@ with demonstrated alpha. No parameter was changed after the hold-out.
 | OKX X-Perp snapshot | `data.universe.okx_xperp_coins(refresh=True)` -> `config/okx_xperps_snapshot.json` | `aee0410` | 2026-11-24 01:18 |
 | Research study (P2.2) | `python main.py --mode tsmom` | `aee0410` | 2026-11-24 01:48 |
 | Hold-out (P2.3) | `python main.py --mode tsmom --final-holdout` | `aee0410` | 2026-11-24 01:55 (hold-out logged 02:00) |
+| Statistical power (P2.5) | `python scripts/power_analysis.py` | this commit | deterministic (no data) |
