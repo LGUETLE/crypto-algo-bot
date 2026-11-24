@@ -27,6 +27,7 @@ from typing import Optional
 import pandas as pd
 
 from backtesting.benchmark import compare, print_comparison
+from backtesting.costs import cost_breakdown, cost_scenarios, print_breakdown, print_scenarios
 from backtesting.engine import BacktestEngine
 from backtesting.metrics import print_report
 from backtesting.optimizer import ParameterOptimizer, _py
@@ -195,6 +196,8 @@ def run_backtest(config: dict, pair: dict, fetcher, final_holdout: bool = False,
     res = engine.run(data.df, strategy, data.symbol, verbose=False, start=start, funding=data.funding)
     _print_trades_summary(res)
     print_report(res.metrics)
+    costs = cost_breakdown(res.trades, res.equity, engine.initial_capital, config)
+    print_breakdown(costs, engine.initial_capital, f"COST REPORT - backtest ({label.lower()})")
     table = _benchmarks(config, engine, data, res.equity, engine.initial_capital,
                         f"BENCHMARKS - backtest ({label.lower()})")
 
@@ -206,9 +209,40 @@ def run_backtest(config: dict, pair: dict, fetcher, final_holdout: bool = False,
     extra = {"holdout_start": data.holdout_start.isoformat()} if final_holdout else {}
     log.append(kind, strategy=strat_name, symbol=data.symbol, timeframe=config["timeframe"],
                params=params, period=_period(res.equity), metrics=res.metrics, n_trials=1,
-               benchmarks=table.reset_index().to_dict(orient="records"),
+               benchmarks=table.reset_index().to_dict(orient="records"), costs=costs,
                funding_source="historical" if data.funding is not None else "constant", **extra)
-    return {"result": res, "benchmarks": table, "split_check": split}
+    return {"result": res, "benchmarks": table, "split_check": split, "costs": costs}
+
+
+# ── Cost report (replaces analyze_costs.py) ──────────────────────────────────
+
+def run_costs(config: dict, pair: dict, fetcher, final_holdout: bool = False, log=None) -> dict:
+    """Configured parameters under cost scenarios + gross/net decomposition. Research period
+    only, unless final_holdout (then it is a logged hold-out use and repeats warn)."""
+    strat_name = pair.get("strategy", config.get("strategy"))
+    log        = log or research_log(config)
+    data       = load_research_data(config, pair, fetcher, final_holdout)
+    cls        = _strategy_class(config, strat_name)
+    start      = data.holdout_start if final_holdout else None
+    if final_holdout:
+        _holdout_guard(log, strat_name, data.symbol, config["timeframe"], data.holdout_start)
+    label = "FINAL HOLD-OUT" if final_holdout else "RESEARCH PERIOD"
+
+    engine = BacktestEngine(config)
+    res    = engine.run(data.df, cls(config), data.symbol, verbose=False, start=start, funding=data.funding)
+    costs  = cost_breakdown(res.trades, res.equity, engine.initial_capital, config)
+    print(f"\n{'=' * 70}\n  COSTS ({label}): {data.symbol} | {strat_name} | configured parameters\n"
+          f"  {res.equity.index[0]:%Y-%m-%d} - {res.equity.index[-1]:%Y-%m-%d}\n{'=' * 70}")
+    print_breakdown(costs, engine.initial_capital, "GROSS VS NET (configured costs)")
+    table = cost_scenarios(config, data.df, cls, data.symbol, data.funding, start=start)
+    print_scenarios(table)
+
+    params = {k: config.get(k) for k in config.get("optimize", {}).get("param_grid", {}).get(strat_name, {})}
+    extra = {"holdout_start": data.holdout_start.isoformat(), "procedure": "cost_report"} if final_holdout else {}
+    log.append("holdout" if final_holdout else "cost_report", strategy=strat_name, symbol=data.symbol,
+               timeframe=config["timeframe"], params=params, period=_period(res.equity), metrics=res.metrics,
+               n_trials=len(table), costs=costs, scenarios=table.reset_index().to_dict(orient="records"), **extra)
+    return {"costs": costs, "scenarios": table, "result": res}
 
 
 def _print_trades_summary(res):

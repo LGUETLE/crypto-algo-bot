@@ -184,3 +184,16 @@ def test_wfo_reports_forced_window_end_exits(tmp_path):
     out = research.run_optimize(_config(tmp_path), PAIR, FakeFetcher())
     m = out["wfo"]["rolling"]["wfo"].metrics
     assert "window_end_exits" in m and "window_end_exit_pnl" in m
+
+
+def test_cost_report_respects_holdout_guard(tmp_path):
+    cfg = _config(tmp_path)
+    log = ResearchLog(cfg["backtest"]["research_log"])
+    a = research.run_costs(cfg, PAIR, FakeFetcher(), log=log)
+    b = research.run_costs(cfg, PAIR, FakeFetcher(poison_after=HS), log=log)
+    assert a["result"].equity.index.max() < HS
+    assert a["costs"] == b["costs"]
+    assert list(a["scenarios"].index)[0] == "No costs" and len(log.entries("cost_report")) == 2
+    research.run_costs(cfg, PAIR, FakeFetcher(), final_holdout=True, log=log)
+    with pytest.warns(research.HoldoutReuseWarning):
+        research.evaluate_holdout(cfg, PAIR, FakeFetcher(), log=log)

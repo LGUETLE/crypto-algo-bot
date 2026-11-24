@@ -48,6 +48,7 @@ class Trade:
     entry_fee:    float                    = 0.0
     exit_fee:     float                    = 0.0
     funding:      float                    = 0.0    # received (+) / paid (-) while open
+    slippage:     float                    = 0.0    # cost of slippage (entry + exit), in quote ccy
 
 
 @dataclass
@@ -185,7 +186,7 @@ class BacktestEngine:
                     position = Trade(symbol=symbol, side=side, entry_time=ts,
                                      entry_price=ep, size=sz["size"],
                                      sl_price=sz["sl_price"], tp_price=sz["tp_price"],
-                                     entry_fee=fee)
+                                     entry_fee=fee, slippage=sz["size"] * abs(ep - o[i]))
 
             # ── 2./3. Intrabar stop / take profit, then trailing ──────────
             if position is not None:
@@ -241,6 +242,7 @@ class BacktestEngine:
         exit_px = raw_price * (1 - self.slippage if is_long else 1 + self.slippage)
         d       = 1 if is_long else -1
         pos.exit_fee  = exit_px * pos.size * self.commission
+        pos.slippage += pos.size * abs(raw_price - exit_px)
         pos.exit_time, pos.exit_price, pos.exit_reason = ts, exit_px, reason
         pos.pnl_usdt  = self._gross(pos) - pos.entry_fee - pos.exit_fee + pos.funding
         return pos
@@ -301,7 +303,7 @@ class BacktestEngine:
             "entry_time": t.entry_time, "exit_time": t.exit_time,
             "entry_price": t.entry_price, "exit_price": t.exit_price,
             "size": t.size, "pnl_usdt": t.pnl_usdt, "exit_reason": t.exit_reason,
-            "fees": t.entry_fee + t.exit_fee, "funding": t.funding,
+            "fees": t.entry_fee + t.exit_fee, "funding": t.funding, "slippage": t.slippage,
         } for t in trades])
 
     # ── Split consistency check (fixed parameters, NO re-fit) ─────────────

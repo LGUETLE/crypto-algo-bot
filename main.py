@@ -3,6 +3,7 @@ crypto-algo-bot - entry point
 =============================
 python main.py --mode backtest [--symbol ETH] [--final-holdout]
 python main.py --mode optimize [--symbol ETH] [--final-holdout]
+python main.py --mode costs [--symbol ETH]      gross vs net, turnover, break-even cost, scenarios
 python main.py --mode paper      simulated fills and stops
 python main.py --mode demo       exchange demo account (real order path, fake money)
 python main.py --mode live       real money
@@ -173,6 +174,14 @@ def run_backtest(config, pairs, symbol_filter=None, final_holdout=False):
         research.run_backtest(config, pair, fetcher, final_holdout=final_holdout)
 
 
+def run_costs(config, pairs, symbol_filter=None, final_holdout=False):
+    from data.fetcher import DataFetcher
+    from backtesting import research
+    fetcher = DataFetcher(config["exchange"])
+    for pair in _target_pairs(pairs, symbol_filter):
+        research.run_costs(config, pair, fetcher, final_holdout=final_holdout)
+
+
 def run_optimize(config, pairs, symbol_filter=None, final_holdout=False):
     from data.fetcher import DataFetcher
     from backtesting import research
@@ -185,7 +194,8 @@ def run_optimize(config, pairs, symbol_filter=None, final_holdout=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["paper", "demo", "live", "backtest", "optimize"], default="paper")
+    parser.add_argument("--mode", choices=["paper", "demo", "live", "backtest", "optimize", "costs"],
+                        default="paper")
     parser.add_argument("--symbol", default=None)
     parser.add_argument("--final-holdout", action="store_true",
                         help="backtest/optimize: evaluate the final hold-out period (logged; do it ONCE)")
@@ -198,13 +208,16 @@ def main():
     logger.info(f"Pairs: {[(p['symbol'], p.get('strategy', '?')) for p in pairs]}")
     logger.info("=" * 50)
 
-    if args.final_holdout and args.mode not in ("backtest", "optimize"):
-        parser.error("--final-holdout only applies to --mode backtest / optimize")
+    if args.final_holdout and args.mode not in ("backtest", "optimize", "costs"):
+        parser.error("--final-holdout only applies to --mode backtest / optimize / costs")
     if args.mode == "backtest":
         run_backtest(config, pairs, symbol_filter=args.symbol, final_holdout=args.final_holdout)
         return
     if args.mode == "optimize":
         run_optimize(config, pairs, symbol_filter=args.symbol, final_holdout=args.final_holdout)
+        return
+    if args.mode == "costs":
+        run_costs(config, pairs, symbol_filter=args.symbol, final_holdout=args.final_holdout)
         return
 
     from execution.broker import Broker
